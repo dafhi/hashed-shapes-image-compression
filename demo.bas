@@ -1,9 +1,11 @@
-/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 18.u1  by dafhi
+/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 19  by dafhi
 
-    Initial rollout by Gemini from my ability to recount my previous work.
+    - a work in progress
+
+    Initial rollout by Gemini from my ability to recount previous work.
   
-    Bonus: Gemini's version didn't create a backup buffer, but instead ..
-    projected what the result would be simply from the shape.
+    Bonus: Gemini's version didn't create a backup buffer, but instead
+    projected the shape's result
   
     Also bonus: i found the inspiration to "deep think" my old idea of
     eliminating source image from fitness calculation.
@@ -11,11 +13,14 @@
     Gemini referred to it as residual error,
     and Qwen also introduced the term energy-based processing.
   
-      easy peasy:
+      basics:
     copy source image to accumulation buffer, subtract avg brightness.
       (buffer will have positive and negative regions)
     circle fitness is a measure of accum buffer movement towards zero.
       (gotta remember to er0*er0 - er1*er1 (or use Abs) )
+   
+      update:
+    removed seed from initial rng state, made it assoc. w/ individual fields
 
 '/
 
@@ -135,19 +140,17 @@ Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_i
     'compute_sobel channel_idx
     
     current_channel_idx = channel_idx
-    g_radius = (imva.w + imva.h) / 4.5
+    g_radius = (imva.w + imva.h) / 5.
 End Sub
 
   function f_adaptive_radius( seed as long = 0) as double
         dim as double f = rng(seed)
-      return clamp( g_radius * ( 1.035 * f + 0.93 * (1-f) ), max(imv.w,imv.h)/1.5, 1.5 )
+      return clamp( g_radius * ( 1.05 * f + 0.91 * (1-f) ), max(imv.w,imv.h) / 1.75, .75 )
   end function
 
 
 Function calculate_fitness(c As CircleShape) As double
     Dim As longint score = 0
-    
-'    c.radius  = f_adaptive_radius(c.radius)
     
     _cliprect c, imv
     Dim As Long r_squared = c.radius * c.radius, csamps
@@ -167,7 +170,6 @@ Function calculate_fitness(c As CircleShape) As double
     dim as long er1 = accumulator_buffer(x,y) + c.brightness
     dim as long improvement = er0*er0 - er1*er1
     
-    '' Weight by edge strength (0 to 1) .. thanks Qwen
     score += improvement' * (0.5 + edge_map(x,y))  '' baseline 0.5, boost on edges
     
     csamps += 1 ' sparse sampling variable
@@ -179,26 +181,36 @@ End Function
 
   sub states_from_seed( byref c as CircleShape, shape_index as long, seed as long )
         using my_rng
-      a = (seed xor xorc) * mulB
-      a xor= shape_index * mulA
+      a = xorC shr current_channel_idx
+      a xor= mulA * shape_index
       a = rotr( a, 20 * current_channel_idx )
       a *= mulB
 
       c.seed = seed
       c.rng_a = a
   end sub  
-    const cbits_rad = 0
-    const cbits_xy  = 3, xy_mask  = 2 ^ cbits_xy - 1
+    
+      '' cbits_xy reduces speed 2x as much as rad or bright
+    const cbits_xy   = 2, xy_mask  = 2 ^ cbits_xy - 1
+    const cbits_rad   = 3, rad_mask  = 2 ^ cbits_rad - 1
+    const cbits_bright  = 1, bright_mask  = 2 ^ cbits_bright - 1
 
-  sub props_from_states( c as circleshape )
+
+  sub props_from_states( c as circleshape, seed as long )
           
-      my_rng.a = c.rng_a ' setup the rng state
+      my_rng.a = c.rng_a ' set the rng state
+        
+       '' sequence guesswork (as well as cbits, defined prior
+      c.radius = f_adaptive_radius( seed and rad_mask )
       
-      '' found this ordering to work well
-      c.x = rng((c.seed shr cbits_rad) and xy_mask) * imv.w
-      c.radius = f_adaptive_radius
-      c.brightness = (38 + 86 * rng) * choose( rng < .5, -1, 1 )
-      c.y = rng * imv.h
+        seed shr= cbits_rad
+      c.y = rng( seed and xy_mask ) * imv.h
+        seed shr= cbits_xy
+      c.x = rng( seed and xy_mask ) * imv.w
+        seed shr= cbits_xy
+        dim as single f = rng( seed and bright_mask )
+        dim as long pos_neg = iif( f < .5, -1, 1 )
+      c.brightness = (25 + rng * (130) ) * pos_neg ' future : make adaptive from circle_index
     
   end sub
 
@@ -207,22 +219,22 @@ Function find_best_circle( circle_index as long ) As CircleShape
     static As CircleShape best_circle, candidate
     Dim As double best_score = -1e12
 
-        for seed as long = 1 to 2^(cbits_rad + cbits_xy)
+        for seed as long = 1 to 2^(cbits_rad + cbits_bright + cbits_xy * 2)
     states_from_seed candidate, circle_index, seed
-    props_from_states candidate
+    props_from_states candidate, seed
     Dim As double score = calculate_fitness(candidate)
     If score > best_score Then
         best_score = score
         best_circle = candidate
     End If
     Next
-'  sleep  
+
     Return best_circle
 End Function
 
 Sub render_circle_to_accum_buf( byval c As CircleShape, reconstruction_phase as long = false )
     
-    props_from_states c
+    props_from_states c, c.seed
     _cliprect c, imv
     
     Dim As Long r_squared = c.radius * c.radius
@@ -340,7 +352,6 @@ End Namespace ' -- hsf
 
 Const IMG_W = 556
 Const IMG_H = 556
-Const CIRCLES_PER_CHANNEL = 7
 
 ScreenRes IMG_W * 2 + 30, IMG_H + 20, 32
 
@@ -357,6 +368,8 @@ For y As Integer = 0 To IMG_H - 1
     Next
 Next
 Put (10, 0), source_image, PSet
+
+Const CIRCLES_PER_CHANNEL = 20
 
 ' --- 2. "Compress" each channel by finding the best circles ---
 Dim As CircleShape red_circles(), green_circles(), blue_circles()
@@ -379,7 +392,7 @@ Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
 
 locate 2,1
     using ns__single_channel_processing
-    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy)
+    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy*2 + cbits_bright)
 print "  estimated size :"; 6 + (cbits_data + 7)shr 3; " bytes .. (6 byte header)"
 print " "
 Print " Press any key to exit."
@@ -390,3 +403,4 @@ ImageDestroy(source_image)
 ImageDestroy(final_image)
 
 Sleep
+
