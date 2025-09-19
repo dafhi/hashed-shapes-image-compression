@@ -1,398 +1,427 @@
-' Flag Simulation v0.40 alpha
-' Coded by UEZ build 2025-09-05
+/' -- hashed shapes image compression (proof of concept) - 2025 Sep 19.u2  by dafhi
 
-#include "crt/math.bi"
-#include "fbgfx.bi"
-Using FB
+    Initial rollout by Gemini from my ability to recount previous work.
+  
+    Bonus: Gemini's version didn't create a backup buffer, but instead
+    projected the shape's result
+  
+    Also bonus: i found the inspiration to "deep think" my old idea of
+    eliminating source image from fitness calculation.
+  
+    Gemini referred to it as residual error,
+    and Qwen also introduced the term energy-based processing.
+  
+      basics:
+    copy source image to accumulation buffer, subtract avg brightness.
+      (buffer will have positive and negative regions)
+    circle fitness is a measure of accum buffer movement towards zero.
+      (gotta remember to er0*er0 - er1*er1 (or use Abs) )
+   
+      update:
+    + f_brightness_base, f_brightness_variance
+  
+      about:
+    inspired by genetic algorithm triangles video around 2014.
+    I figured i could do it at least 1000x quicker, and with circles.
+  
 
-#define Min(a, b)    (IIf(a < b, a, b))
-#define Max(a, b)    (IIf(a > b, a, b))
+    if you're interested in another simple algorithms with excellent
+    compression potential ..
+  
+    string art - https://www.freebasic.net/forum/viewtopic.php?t=33107
 
-' Grid and physics constants
-Const nX = 50, nY = Int(nX * 0.6666)   ' Grid points
-Const Spacing = 7                      ' Distance between points
-Const diagSpacing = Spacing * Sqr(2)   ' Diagonal spacing
-Const Damping = 0.994                  ' Physics damping factor
-Const Gravity = 0.175                  ' Gravity force
-Const ConstraintIter = 2               ' Constraint iterations
+'/
 
-' 2D Vector type
-Type Vec2D
-    x As Double
-    y As Double
+
+Type imvars
+    As Long      w, h, bypp, pitch
+    As Any Ptr   pixels, im
 End Type
 
-Dim Shared As Vec2D posi(nX, nY), oldPos(nX, nY)
+      ' -- image class helpers
+  sub _gfx_release( byref im as any ptr )
+    if im <> 0 then if imageinfo(im) = 0 then imagedestroy im
+    im = 0
+  end sub
 
-' Perlin Noise implementation by Joshy aka D.J. Peters (R.I.P.)
-Type REAL As Double
-#define rAbs(x_)    IIf( (x_) < 0, -(x_), (x_) )
-Const As REAL rPI = Acos(-1)
-Const As REAL rDeg2Rad = rPI / 180
-
-Type PERLINNOISE '...'
-    Declare Constructor
-    Declare Sub NoiseSeed(ByVal seed As Double)
-    Declare Sub NoiseDetail(ByVal lod As Integer)
-    Declare Sub NoiseDetail(ByVal lod As Integer, ByVal falloff As REAL)
-    Declare Function Noise1D(ByVal x As REAL) As REAL
-    Declare Function Noise2D(ByVal x As REAL, ByVal y As REAL) As REAL
-    Declare Function Noise3D(ByVal x As REAL, ByVal y As REAL, ByVal z As REAL) As REAL
-    
-Private:
-    Const As REAL    SINCOS_PRECISION = 0.5
-    Const As Integer SINCOS_LENGTH    = (360 / SINCOS_PRECISION)
-    Const As Integer PERLIN_YWRAPB    = 4
-    Const As Integer PERLIN_YWRAP     = 1 Shl PERLIN_YWRAPB
-    Const As Integer PERLIN_ZWRAPB    = 8
-    Const As Integer PERLIN_ZWRAP     = 1 Shl PERLIN_ZWRAPB
-    Const As Integer PERLIN_SIZE      = 4095
-    Const As Integer PERLIN_TWOPI     = SINCOS_LENGTH
-    Const As Integer PERLIN_PI        = PERLIN_TWOPI Shr 1
-    
-    As Integer perlin_octaves         = 4   ' Default to medium smooth
-    As REAL    perlin_amp_falloff     = 0.5 ' 50% reduction per octave
-    As REAL    perlin_cosTable(SINCOS_LENGTH-1)
-    As REAL    perlin(PERLIN_SIZE)
-    
-    Declare Sub reInit
-    Declare Function noise_fsc(ByVal i As REAL) As REAL
-End Type
-
-Constructor PERLINNOISE '...'
-    For i As Integer = 0 To SINCOS_LENGTH - 1
-        perlin_cosTable(i) = Cos(i * rDeg2Rad * SINCOS_PRECISION)
-    Next
-    reInit
-End Constructor
-
-Sub PERLINNOISE.reInit '...'
-    For i As Integer = 0 To PERLIN_SIZE
-        perlin(i) = Rnd()
-    Next
-End Sub
-
-Function PERLINNOISE.noise_fsc(ByVal i As REAL) As REAL '...'
-    Dim As Integer index = Int(i * PERLIN_PI)
-    Return 0.5 * (1.0 - perlin_cosTable(index Mod SINCOS_LENGTH))
-End Function
-
-Sub PERLINNOISE.NoiseSeed(ByVal seed As Double) '...'
-    Randomize(seed) : reInit
-End Sub
-
-Sub PERLINNOISE.NoiseDetail(ByVal lod As Integer) '...'
-    If (lod > 0) Then perlin_octaves = lod
-End Sub
-
-Sub PERLINNOISE.NoiseDetail(ByVal lod As Integer, ByVal falloff As REAL) '...'
-    If (lod > 0) Then perlin_octaves = lod
-    If (falloff > 0) Then perlin_amp_falloff = falloff
-End Sub
-
-Function PERLINNOISE.Noise1D(ByVal x As REAL) As REAL '...'
-    Return Noise3D(x, 0, 0)
-End Function
-
-Function PERLINNOISE.Noise2D(ByVal x As REAL, ByVal y As REAL) As REAL '...'
-    Return Noise3D(x, y, 0)
-End Function
-
-Function PERLINNOISE.Noise3D(ByVal x As REAL, ByVal y As REAL, ByVal z As REAL) As REAL '...'
-    x = rAbs(x) : y = rAbs(y) : z = rAbs(z)
-    Dim As Integer xi = Int(x), yi = Int(y), zi = Int(z)
-    Dim As REAL xf = x - xi, yf = y - yi, zf = z - zi
-    Dim As REAL r, ampl = 0.5
-    
-    For i As Integer = 0 To perlin_octaves - 1
-        Dim As Integer of = xi + (yi Shl PERLIN_YWRAPB) + (zi Shl PERLIN_ZWRAPB)
-        Dim As REAL rxf = noise_fsc(xf)
-        Dim As REAL ryf = noise_fsc(yf)
-        Dim As REAL n1 = perlin(of And PERLIN_SIZE)
-        n1 += rxf * (perlin((of + 1) And PERLIN_SIZE) - n1)
-        Dim As REAL n2 = perlin((of + PERLIN_YWRAP) And PERLIN_SIZE)
-        n2 += rxf * (perlin((of + PERLIN_YWRAP + 1) And PERLIN_SIZE) - n2)
-        n1 += ryf * (n2 - n1)
-        of += PERLIN_ZWRAP
-        n2 = perlin(of And PERLIN_SIZE)
-        n2 += rxf * (perlin((of + 1) And PERLIN_SIZE) - n2)
-        Dim As REAL n3 = perlin((of + PERLIN_YWRAP) And PERLIN_SIZE)
-        n3 += rxf * (perlin((of + PERLIN_YWRAP + 1) And PERLIN_SIZE) - n3)
-        n2 += ryf * (n3 - n2)
-        n1 += noise_fsc(zf) * (n2 - n1)
-        r += n1 * ampl
-        ampl *= perlin_amp_falloff
-        xi Shl = 1: xf *= 2
-        yi Shl = 1: yf *= 2
-        zi Shl = 1: zf *= 2
-        If (xf >= 1) Then xi += 1 : xf -= 1
-        If (yf >= 1) Then yi += 1 : yf -= 1
-        If (zf >= 1) Then zi += 1 : zf -= 1
-    Next
-    
-    Return r
-End Function
-
-' Triangle drawing function with scanline filling
-Sub DrawFilledTriangle(x1 As Long, y1 As Long, _
-                       x2 As Long, y2 As Long, _
-                       x3 As Long, y3 As Long, _
-                       col As ULong)
-    
-    Dim As Long minY, maxY, y, x
-    Dim As Long intersections, xIntersect(2)
-    Dim As Single slope1, slope2, xStart, xEnd
-    
-    ' Determine Y range
-    minY = y1
-    If y2 < minY Then minY = y2
-    If y3 < minY Then minY = y3
-    
-    maxY = y1
-    If y2 > maxY Then maxY = y2
-    If y3 > maxY Then maxY = y3
-    
-    ' For each scanline
-    For y = minY To maxY
-        intersections = 0
-        
-        ' Calculate intersections with three edges
-        If ((y1 <= y And y < y2) Or (y2 <= y And y < y1)) And y1 <> y2 Then
-            xIntersect(intersections) = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
-            intersections += 1
-        End If
-        
-        If ((y2 <= y And y < y3) Or (y3 <= y And y < y2)) And y2 <> y3 Then
-            xIntersect(intersections) = x2 + (y - y2) * (x3 - x2) / (y3 - y2)
-            intersections += 1
-        End If
-        
-        If ((y3 <= y And y < y1) Or (y1 <= y And y < y3)) And y3 <> y1 Then
-            xIntersect(intersections) = x3 + (y - y3) * (x1 - x3) / (y1 - y3)
-            intersections += 1
-        End If
-        
-        ' Draw line between intersection points
-        If intersections = 2 Then
-            If xIntersect(0) > xIntersect(1) Then
-                Swap xIntersect(0), xIntersect(1)
-            End If
-            Line (xIntersect(0), y)-(xIntersect(1), y), col
-        End If
-    Next
-End Sub
-
-' Apply distance constraint between two points
-Sub ApplyConstraint(i1 As Long, j1 As Long, i2 As Long, j2 As Long, targetDist As Double) '...'
-    Dim As Double dx = posi(i2, j2).x - posi(i1, j1).x
-    Dim As Double dy = posi(i2, j2).y - posi(i1, j1).y
-    Dim As Double dist = Sqr(dx * dx + dy * dy)
-    If dist = 0 Then Exit Sub
-
-    Dim As Double diff = (dist - targetDist) / dist
-    
-    ' If one point is fixed (column 0) -> apply full correction to movable point
-    If i1 = 0 Then
-        posi(i2, j2).x -= dx * diff
-        posi(i2, j2).y -= dy * diff
-    ElseIf i2 = 0 Then
-        posi(i1, j1).x += dx * diff
-        posi(i1, j1).y += dy * diff
+Sub fill_imvars( Byref i As imvars, im As Any Ptr = 0)
+    _gfx_release i.im
+    If im = 0 Then
+        ScreenInfo i.w, i.h, , i.bypp, i.pitch: i.pixels = screenptr
     Else
-        ' Both points movable -> split correction
-        posi(i1, j1).x += dx * diff * 0.5
-        posi(i1, j1).y += dy * diff * 0.5
-        posi(i2, j2).x -= dx * diff * 0.5
-        posi(i2, j2).y -= dy * diff * 0.5
+        ImageInfo im, i.w, i.h, i.bypp, i.pitch, i.pixels: i.im = im
     End If
 End Sub
 
-' Center window on screen
-Sub CenterFBWin(iW As Long, iH As Long, iTBw As Long = 0, iTBh As Long = 0) '...'
-    Dim As Long iScreenWidth, iScreenHeight
-    ScreenControl GET_DESKTOP_SIZE, iScreenWidth, iScreenHeight
-    ScreenControl SET_WINDOW_POS, (iScreenWidth - iW) \ 2 - iTBw, (iScreenHeight - iH) \ 2 - iTBh
+  #define min( a,b) iif( (a)<(b), (a), (b) )
+  #define max( a,b) iif( (a)>(b), (a), (b) )
+
+function clamp( in As double, hi As double = 1, lo As double = 0) As double
+  return min( max(in, lo), hi )
+End Function
+
+
+' A structure to hold the properties of a single circle.
+Type CircleShape
+    as single x, y
+    as single radius
+    As single brightness ' Can be positive or negative
+  
+    as ulongint seed, rng_a
+End Type
+
+sub print_shape_props( c as circleshape )
+    print "x y rad a : "; c.x; " "; c.y; " "; c.radius; " "; c.brightness
+end sub
+
+
+  function rotr( i as ulongint, r as byte ) as ulongint
+      return i shr r or i shl (64 - r)
+  end function
+
+    namespace my_rng '' 2025 Sep 16 - crafted for lossy image format  by dafhi
+
+const as ulongint     mulA  = &b0000000001000000000100000000100000001000000100000100001000100101
+const as ulongint     mulB  = &b1101001100001000000000010000000000000000100100000000000010000001 ' 2025 Sep 12
+const as ulongint     xorC  = &b0101010101010101010101010101010101010101010101010101010101010101
+
+dim as ulongint       a, b, c,d,e, ro, xorshifted
+
+function v( seed as ulongint ) as ulongint
+    a = mulB * (a xor seed) + 1'mulA
+    return a
+end function
+
+end namespace ' -- my_rng
+
+  function rng( seed as ulongint = 0 ) as double
+      return my_rng.v(seed) / ( 2^64 + (2048 + 2) )
+  end function
+
+
+  #define CHOOSE(cond, a, b) (IIf_workaround__((cond), (a), (b))) '' possible perf. boost by Qwen3
+function IIf_workaround__(cond as boolean, a as long, b as long) as long
+    If cond Then Return a
+    Return b
+End Function
+
+
+' BGRA byte order for 32-bit screen/images in FreeBASIC GFX
+Const BLUE_IDX  = 0
+Const GREEN_IDX = 1
+Const RED_IDX   = 2
+Const ALPHA_IDX = 3
+
+#define ACCUM_TYPE Short
+
+    Namespace ns__single_channel_processing
+
+dim as long x0, x1, y0, y1
+
+sub _cliprect( c as CircleShape, imva as imvars )
+    x0 = max( c.x - c.radius, 0 )
+    y0 = max( c.y - c.radius, 0 )
+    x1 = min(c.x + c.radius, imva.w - 1 )
+    y1 = min(c.y + c.radius, imva.h - 1 )
+end sub
+
+' -- Shared variables within the namespace --
+Dim As imvars     imv ' Holds info about the source/dest image
+Dim As ACCUM_TYPE accumulator_buffer(any, any) ' The 2-byte signed buffer
+dim as ubyte      component_average(0 to 2), current_channel_idx ' Which channel (R,G,B) we're working on
+  
+    dim as double g_radius
+
+  ' initializes processing for one channel.  saves some memory
+Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_idx As Integer, circle_list() as circleshape)', num_circles as long )
+        
+    if imva.im <> source_image then
+    fill_imvars(imva, source_image)
+    endif
+    
+      dim as long w = ubound(accumulator_buffer,1) + 1
+      dim as long h = ubound(accumulator_buffer,2) + 1
+    if imva.w<>w or imva.h<>h then
+        redim accumulator_buffer(imva.w-1,imva.h-1)
+        'Redim edge_map(imv.w-1, imv.h-1)
+    endif
+    'compute_sobel channel_idx
+    
+    current_channel_idx = channel_idx
+    g_radius = (imva.w + imva.h) / 6.5
 End Sub
 
-' ===== Flag in Wind Simulation =====
-Randomize
+  function f_adaptive_radius( seed as long = 0) as double
+        dim as double f = rng(seed)
+      return clamp( g_radius * ( 1.12 * f + 0.84 * (1-f) ), max(imv.w,imv.h) / 2.25, .85 )
+  end function
 
-' Initialize Perlin noise
-Dim Shared pn As PERLINNOISE
-pn.NoiseSeed(Timer)
-pn.NoiseDetail(4, 0.5)
 
-' FPS counter variables
-Dim As UShort iFPS, cfps = 0
-Dim As Double fTimer
-Dim As Long i, j, iter
+Function calculate_fitness(c As CircleShape) As double
+    Dim As longint score = 0
+    
+    _cliprect c, imv
+    Dim As Long r_squared = c.radius * c.radius, csamps
+  
+    '' sparse sampling
+    dim as long _step = iif( c.radius < 6, 1, sqr(c.radius * .4) )
+        
+        For y As Long = y0 To y1 step _step
+    Dim As Long dy = y - c.y, dySq = dy * dy
+        
+        For x As Long = x0 + rnd*_step To x1 step _step
+    Dim As Long dx = x - c.x
+        If (dx*dx + dySq) > r_squared Then continue for
+    
+    ' Gemini described this as residual processing (no source image involved)
+    dim as long er0 = accumulator_buffer(x,y)
+    dim as long er1 = accumulator_buffer(x,y) + c.brightness
+    dim as long improvement = er0*er0 - er1*er1
+    
+    score += improvement' * (0.5 + edge_map(x,y))  '' baseline 0.5, boost on edges
+    
+    csamps += 1 ' sparse sampling variable
+        
+        Next x
+    Next y
+    Return score * csamps
+End Function
 
-' Screen setup
-Const w = 1200, h = 800
-ScreenRes w, h, 32, 2, GFX_ALPHA_PRIMITIVES Or GFX_NO_SWITCH
-ScreenSet 1, 0
-Color &hFFFFFFFF, &hFF202020
-Cls
+  sub states_from_seed( byref c as CircleShape, shape_index as long, seed as long )
+        using my_rng
+      a = xorC shr current_channel_idx
+      a xor= mulA * shape_index
+      a = rotr( a, 20 * current_channel_idx )
+      a *= mulB
 
-' Initialize flag grid positions
-Dim As Long px = w \ 2 - 15, py = 100
+      c.seed = seed
+      c.rng_a = a
+  end sub
+  
+  function f_brightness_base( shape_index as long ) as single
+      return .989 ^ shape_index
+  end function
+  
+  function f_brightness_variance( shape_index as long ) as single
+      return .989 ^ shape_index
+  end function
 
-For i = 0 To nX
-    For j = 0 To nY
-        posi(i, j).x = px + i * Spacing
-        posi(i, j).y = py + j * Spacing
-        oldPos(i, j) = posi(i, j)
+    '' cbits_xy reduces encoding speed 2x
+  const cbits_xy   = 1, xy_mask  = 2 ^ cbits_xy - 1
+  const cbits_rad   = 1, rad_mask  = 2 ^ cbits_rad - 1
+  const cbits_bright  = 1, bright_mask  = 2 ^ cbits_bright - 1
+
+
+  sub props_from_states( c as circleshape, seed as long, shape_index as long )
+          
+      my_rng.a = c.rng_a ' set the rng state
+      
+       '' sequence guesswork (cbits, defined above)
+        
+          dim as single f = rng( seed and bright_mask )
+        dim as long   pos_neg = iif( f < .5, -1, 1 )
+        
+        dim as single br_base = f_brightness_base( shape_index )
+        dim as single br_var = f_brightness_variance( shape_index )
+        
+      c.brightness = (30 * br_base + rng * (60 * br_var) ) * pos_neg ' future : make adaptive from circle_index
+        seed shr= cbits_bright
+        
+      c.radius = f_adaptive_radius( seed and rad_mask )
+        seed shr= cbits_rad
+      
+      c.y = rng( seed and xy_mask ) * imv.h
+        seed shr= cbits_xy
+        
+      c.x = rng( seed and xy_mask ) * imv.w
+    
+  end sub
+
+
+Function find_best_circle( circle_index as long ) As CircleShape
+    static As CircleShape best_circle, candidate
+    Dim As double best_score = -1e12
+
+        for seed as long = 1 to 2^(cbits_rad + cbits_bright + cbits_xy * 2)
+    states_from_seed candidate, circle_index, seed
+    props_from_states candidate, seed, circle_index
+    Dim As double score = calculate_fitness(candidate)
+    If score > best_score Then
+        best_score = score
+        best_circle = candidate
+    End If
+    Next
+
+    Return best_circle
+End Function
+
+Sub render_circle_to_accum_buf( byval c As CircleShape, shape_index as long, reconstruction_phase as long = false )
+    
+    props_from_states c, c.seed, shape_index
+    _cliprect c, imv
+    
+    Dim As Long r_squared = c.radius * c.radius
+    if reconstruction_phase then c.brightness = -c.brightness
+    
+        For y As Long = y0 To y1
+    Dim As Long dy = y - c.y, dySq = dy * dy
+        
+        For x As Long = x0 To x1
+    Dim As Long dx = x - c.x
+    If (dx*dx + dySq) > r_squared Then continue for
+    
+    Dim As Long new_val = accumulator_buffer(x,y) + c.brightness
+    accumulator_buffer(x,y) = clamp(new_val, 32767, -32768)
+    
+    Next x
+    Next y
+  
+    g_radius = c.radius
+
+End Sub
+
+End Namespace ' -- ns__single_channel_processing
+
+
+    Namespace hsf ' -- hashed shapes format
+    
+Using ns__single_channel_processing
+
+Sub process_channel( source_image as any ptr, channel_idx As Integer, circle_list() As CircleShape, num_circles As Integer)
+
+    Redim circle_list(1 To num_circles)
+    setup_channel_processing imv, source_image, channel_idx, circle_list()
+    
+      ' --- calculate channel average brightness ---
+    Dim As UByte Ptr src_pix = Cptr(UByte Ptr, imv.pixels)
+    Dim As Double total_brightness = 0
+    For y As Long = 0 To imv.h - 1
+        Dim As UByte Ptr row_ptr = src_pix + y * imv.pitch
+        For x As Long = 0 To imv.w - 1
+            total_brightness += row_ptr[x * 4 + channel_idx]
+        Next
+    Next
+    component_average(channel_idx) = total_brightness / (imv.w*imv.h)
+    
+    ' --- copy image channel, subtract the average
+        For y As Long = 0 To imv.h-1
+    Dim As UByte Ptr row_ptr = src_pix + y * imv.pitch
+        For x As Long = 0 To imv.w-1
+    accumulator_buffer(x,y) = _
+    row_ptr[x * 4 + channel_idx] - component_average(channel_idx)
+    Next: next
+    ' -------------------------------------------------------------------------
+    
+'    Print "Processing channel " & channel_idx & "..."
+    For i As Integer = 1 To num_circles
+        If (i Mod 100 = 0) Then Print "  Circle " & i & " of " & num_circles
+        Dim As CircleShape best_fit = find_best_circle(i)
+        circle_list(i) = best_fit
+'        print_shape_props best_fit
+        render_circle_to_accum_buf best_fit, i
+    Next
+
+#if 0
+    static as imvars imvars_t
+    if imvars_t.w <> imv.w or imvars_t.h <> imv.h then
+    fill_imvars imvars_t, imagecreate(imv.w,imv.h)
+    endif
+    Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
+    For y As Long = 0 To imvars_t.h - 1
+        Dim As UByte Ptr row_ptr = dest_pixels + y * imvars_t.pitch
+        For x As Long = 0 To imvars_t.w - 1
+            row_ptr[x * 4 + channel_idx] = clamp( accumulator_buffer(x,y) + component_average(channel_idx), 255 )
+        Next
+    Next
+    put (0,0), imvars_t.im, pset
+'    sleep
+#endif
+'    Print "Channel " & channel_idx & " processing complete."
+End Sub
+
+Sub construct_target_channel( circle_list() As CircleShape, target_image As Any Ptr, channel_idx As Integer )
+    static as imvars imvars_t
+    setup_channel_processing imvars_t, target_image, channel_idx, circle_list()
+
+    For y As Long = 0 To imvars_t.h - 1
+    For x As Long = 0 To imvars_t.w - 1
+        accumulator_buffer(x,y) = component_average(channel_idx)
+    Next : next
+    ' ------------------------------------------------
+
+        For i As Integer = LBound(circle_list) To UBound(circle_list)
+    dim as long reconstruction = true
+    render_circle_to_accum_buf circle_list(i), i, reconstruction
+    Next
+
+    ' copy to corresponding target channel
+    Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
+    For y As Long = 0 To imvars_t.h - 1
+        Dim As UByte Ptr row_ptr = dest_pixels + y * imvars_t.pitch
+        For x As Long = 0 To imvars_t.w - 1
+            row_ptr[x * 4 + channel_idx] = clamp( accumulator_buffer(x,y), 255 )
+        Next
+    Next
+End Sub
+
+End Namespace ' -- hsf
+
+
+' =============================================================================
+'   MAIN PROGRAM
+' =============================================================================
+
+Const IMG_W = 556
+Const IMG_H = 556
+
+ScreenRes IMG_W * 2 + 30, IMG_H + 20, 32
+
+const black = rgb(0,0,0)
+
+' --- 1. Create a procedural test image ---
+Dim As Any Ptr source_image = ImageCreate(IMG_W, IMG_H)', 0, Black)
+For y As Integer = 0 To IMG_H - 1
+    For x As Integer = 0 To IMG_W - 1
+        Dim As UByte r = x
+        Dim As UByte g = y
+        Dim As UByte b = 255 - (x/2 + y/2)
+        PSet source_image, (x, y), RGBA(r, g, b, 255)
     Next
 Next
+Put (10, 0), source_image, PSet
 
-' Simulation variables
-Dim As Double t, wind, fx, fy
-Dim As Double gust, windStrength, baseWind 
-Dim As Double w1x, w1y, w2x, w2y, w3x, w3y
-Dim As Double scale, vx, vy
-Dim As Double x0, y0, x1, y1, x2, y2, x3, y3
-Dim As Double dx, dy, bright, factor, n, flicker, dx1, dy1, dx2, dy2, cross
-Dim As Long baseR, baseG, baseB
-Dim As Long r, g, b
-Dim As ULong col
-Dim As Vec2D temp
+Const CIRCLES_PER_CHANNEL = 70
 
-' Main simulation loop
-Do
-    Cls
-    
-    ' Draw flag pole
-    Line (px - 5, py - 30) - (px + 5, h), &hFF999999, BF
-    Circle (px, py - 30), 10, &hFFDADBDD, , , , F
-    
-    ' 1) Verlet Integration - Physics simulation for each point
-    For i = 1 To nX
-        For j = 0 To nY
-            temp = posi(i, j)
-            
-            ' Base movement = (current position - old position) * damping
-            vx = (posi(i, j).x - oldPos(i, j).x) * Damping
-            vy = (posi(i, j).y - oldPos(i, j).y) * Damping
-            
-            ' Wind force calculation per point
-            
-            ' Wind strength over time
-            windStrength = 0.25 * pn.Noise1D(t * 0.002)
-            
-            ' Smooth transition (avoid harsh jumps)
-            If windStrength < 0.1 Then windStrength = 0
-            
-            gust = 0.2 + pn.Noise1D(t * 0.05)
-            
-            ' Base wind fluctuates over time
-            baseWind = windStrength  
-            
-            ' Large, slow wave
-            w1x = (pn.Noise3D(i * 0.05, j * 0.08, t * 0.2) - 0.5) * 5
-            w1y = (pn.Noise3D(i * 0.05, j * 0.08, t * 0.2 + 50) - 0.5) * 2
-            
-            ' Medium structure
-            w2x = (pn.Noise3D(i * 0.12, j * 0.15, t * 0.6) - 0.5) * 6
-            w2y = (pn.Noise3D(i * 0.12, j * 0.15, t * 0.6 + 100) - 0.5) * 3
-            
-            ' Fine fluttering
-            w3x = (pn.Noise3D(i * 0.25, j * 0.25, t * 1.2) - 0.5) * 2
-            w3y = (pn.Noise3D(i * 0.25, j * 0.25, t * 1.2 + 200) - 0.5) * 1.1
-            
-            ' Total wind = wind strength * (gusts + waves)
-            scale = i / nX
-            fx = scale * (baseWind + gust * (w1x + w2x + w3x))
-            fy = scale * gust * (w1y + w2y + w3y + Gravity)
-           
-            ' Verlet integration: calculate new position
-            posi(i, j).x += vx + fx
-            posi(i, j).y += vy + fy + Gravity
-            
-            oldPos(i, j) = temp
-        Next
-    Next
-    
-    ' 2) Constraint system: correct distances between points
-    For iter = 0 To ConstraintIter
-        For i = 0 To nX
-            For j = 0 To nY
-                ' Horizontal connections
-                If i < nX Then ApplyConstraint(i, j, i + 1, j, Spacing) 
-                
-                ' Vertical connections
-                If j < nY Then ApplyConstraint(i, j, i, j + 1, Spacing) 
-                
-                ' Diagonal connections for stability
-                If i < nX And j < nY Then
-                    ApplyConstraint(i, j, i + 1, j + 1, diagSpacing)
-                    ApplyConstraint(i + 1, j, i, j + 1, diagSpacing)                	
-                End If
-            Next
-        Next
-    Next
-    
-    ' 3) Fix first column to flag pole
-    For j = 0 To nY
-        posi(0, j).x = px
-        posi(0, j).y = py + j * Spacing
-    Next
-    
-    ' 4) Rendering: draw flag as triangles
-    For i = 0 To nX - 1
-        For j = 0 To nY - 1
-            ' Corner points of the cell
-            x0 = posi(i, j).x           : y0 = posi(i, j).y
-            x1 = posi(i + 1, j).x       : y1 = posi(i + 1, j).y
-            x2 = posi(i, j + 1).x       : y2 = posi(i, j + 1).y
-            x3 = posi(i + 1, j + 1).x   : y3 = posi(i + 1, j + 1).y
+' --- 2. "Compress" each channel by finding the best circles ---
+Dim As CircleShape red_circles(), green_circles(), blue_circles()
 
-            ' German flag colors: black-red-gold
-            Select Case (j \ (nY / 3)) Mod 3
-                Case 0: baseR = 24  : baseG = 24  : baseB = 24   ' Black
-                Case 1: baseR = 200 : baseG = 0   : baseB = 0    ' Red
-                Case 2: baseR = 240 : baseG = 200 : baseB = 40   ' Gold
-            End Select
-            
-            ' Shading through wave deformation
-            dx = ((x1 + x3) - (x0 + x2)) / 2
-            dy = ((y2 + y3) - (y0 + y1)) / 2
+hsf.process_channel(source_image, RED_IDX,   red_circles(),   CIRCLES_PER_CHANNEL)
+hsf.process_channel(source_image, GREEN_IDX, green_circles(), CIRCLES_PER_CHANNEL)
+hsf.process_channel(source_image, BLUE_IDX,  blue_circles(),  CIRCLES_PER_CHANNEL)
 
-            ' Cross product -> curvature, Abs() for symmetric brightness
-            cross = dx * dy
+Dim As Any Ptr final_image = ImageCreate(IMG_W, IMG_H)', 0, Black)
 
-            bright = 0.7 + 0.3 * (Abs(cross) / (Spacing * Spacing))
+hsf.construct_target_channel(red_circles(),   final_image, RED_IDX)
+hsf.construct_target_channel(green_circles(), final_image, GREEN_IDX)
+hsf.construct_target_channel(blue_circles(),  final_image, BLUE_IDX)
+Draw String (10, IMG_H + 5), "Original Image"
 
-            ' Limit for realistic values
-            If bright < 0.1 Then bright = 0.1
-            If bright > 1.0 Then bright = 1.0
+' --- 4. Display results and save to disk ---
+Put (IMG_W + 20, 0), final_image, PSet
+Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
+'BSave "reconstructed_image.bmp", final_image
 
-            ' Final color calculation
-            r = baseR * bright
-            g = baseG * bright
-            b = baseB * bright
+locate 2,1
+    using ns__single_channel_processing
+    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy*2 + cbits_bright)
+print "  estimated size :"; 6 + (cbits_data + 7)shr 3; " bytes .. (6 byte header)"
+print " "
+Print " Press any key to exit."
+print " "
 
-            col = RGB(r, g, b)
+' Clean up memory
+ImageDestroy(source_image)
+ImageDestroy(final_image)
 
-            ' Draw two triangles per quad
-            DrawFilledTriangle(x0, y0, x1, y1, x2, y2, col)
-            DrawFilledTriangle(x1, y1, x3, y3, x2, y2, col)
-        Next
-    Next
+Sleep
 
-    t += 0.33333
-
-    ' Display FPS counter
-    Draw String(4, 4), iFPS & " fps", &hFFFFFFFF
-    
-    Flip
-
-    ' FPS calculation
-    If Timer - fTimer > 0.99 Then
-        iFPS = cfps
-        cfps = 0
-        fTimer = Timer
-    End If
-    cfps += 1
-    
-    Sleep(10)
-Loop Until Len(Inkey())
