@@ -1,4 +1,4 @@
-/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 19  by dafhi
+/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 19.u1  by dafhi
 
     - a work in progress
 
@@ -20,7 +20,7 @@
       (gotta remember to er0*er0 - er1*er1 (or use Abs) )
    
       update:
-    removed seed from initial rng state, made it assoc. w/ individual fields
+    tweaks -> rad, xy, brightness bit count
 
 '/
 
@@ -145,7 +145,7 @@ End Sub
 
   function f_adaptive_radius( seed as long = 0) as double
         dim as double f = rng(seed)
-      return clamp( g_radius * ( 1.05 * f + 0.91 * (1-f) ), max(imv.w,imv.h) / 1.75, .75 )
+      return clamp( g_radius * ( 1.07 * f + 0.91 * (1-f) ), max(imv.w,imv.h) / 2.25, .85 )
   end function
 
 
@@ -190,10 +190,11 @@ End Function
       c.rng_a = a
   end sub  
     
-      '' cbits_xy reduces speed 2x as much as rad or bright
-    const cbits_xy   = 2, xy_mask  = 2 ^ cbits_xy - 1
-    const cbits_rad   = 3, rad_mask  = 2 ^ cbits_rad - 1
-    const cbits_bright  = 1, bright_mask  = 2 ^ cbits_bright - 1
+
+    '' cbits_xy reduces speed 2x as much as rad or bright
+  const cbits_xy   = 1, xy_mask  = 2 ^ cbits_xy - 1
+  const cbits_rad   = 6, rad_mask  = 2 ^ cbits_rad - 1
+  const cbits_bright  = 0, bright_mask  = 2 ^ cbits_bright - 1
 
 
   sub props_from_states( c as circleshape, seed as long )
@@ -207,10 +208,11 @@ End Function
       c.y = rng( seed and xy_mask ) * imv.h
         seed shr= cbits_xy
       c.x = rng( seed and xy_mask ) * imv.w
+      
         seed shr= cbits_xy
         dim as single f = rng( seed and bright_mask )
         dim as long pos_neg = iif( f < .5, -1, 1 )
-      c.brightness = (25 + rng * (130) ) * pos_neg ' future : make adaptive from circle_index
+      c.brightness = (25 + rng * (110) ) * pos_neg ' future : make adaptive from circle_index
     
   end sub
 
@@ -369,7 +371,7 @@ For y As Integer = 0 To IMG_H - 1
 Next
 Put (10, 0), source_image, PSet
 
-Const CIRCLES_PER_CHANNEL = 20
+Const CIRCLES_PER_CHANNEL = 40
 
 ' --- 2. "Compress" each channel by finding the best circles ---
 Dim As CircleShape red_circles(), green_circles(), blue_circles()
@@ -403,4 +405,3 @@ ImageDestroy(source_image)
 ImageDestroy(final_image)
 
 Sleep
-
