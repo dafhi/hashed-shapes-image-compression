@@ -1,4 +1,4 @@
-/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 18  by dafhi
+/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 18.u1  by dafhi
 
     Initial rollout by Gemini from my ability to recount my previous work.
   
@@ -135,13 +135,14 @@ Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_i
     'compute_sobel channel_idx
     
     current_channel_idx = channel_idx
-    g_radius = (imva.w + imva.h) / 5.5
+    g_radius = (imva.w + imva.h) / 4.5
 End Sub
 
-function f_adaptive_radius( seed as long = 0) as double
-      dim as double f = rng(seed)
-    return g_radius * ( 1.04 * f + 0.91 * (1-f) )
-end function
+  function f_adaptive_radius( seed as long = 0) as double
+        dim as double f = rng(seed)
+      return clamp( g_radius * ( 1.035 * f + 0.93 * (1-f) ), max(imv.w,imv.h)/1.5, 1.5 )
+  end function
+
 
 Function calculate_fitness(c As CircleShape) As double
     Dim As longint score = 0
@@ -196,10 +197,9 @@ End Function
       '' found this ordering to work well
       c.x = rng((c.seed shr cbits_rad) and xy_mask) * imv.w
       c.radius = f_adaptive_radius
-      c.brightness = (18 + 36 * rng) * choose( rng < .5, -1, 1 )
+      c.brightness = (38 + 86 * rng) * choose( rng < .5, -1, 1 )
       c.y = rng * imv.h
     
-  '    c.x = rng() * imv.w
   end sub
 
 
@@ -277,7 +277,7 @@ Sub process_channel( source_image as any ptr, channel_idx As Integer, circle_lis
     Next: next
     ' -------------------------------------------------------------------------
     
-    Print "Processing channel " & channel_idx & "..."
+'    Print "Processing channel " & channel_idx & "..."
     For i As Integer = 1 To num_circles
         If (i Mod 100 = 0) Then Print "  Circle " & i & " of " & num_circles
         Dim As CircleShape best_fit = find_best_circle(i)
@@ -320,7 +320,7 @@ Sub construct_target_channel( circle_list() As CircleShape, target_image As Any 
 '    ? circle_list(i).radius.i;
 
     Next
-'sleep
+
     ' copy to corresponding target channel
     Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
     For y As Long = 0 To imvars_t.h - 1
@@ -340,10 +340,9 @@ End Namespace ' -- hsf
 
 Const IMG_W = 556
 Const IMG_H = 556
-Const CIRCLES_PER_CHANNEL = 338 ' Reduced for faster demo
+Const CIRCLES_PER_CHANNEL = 7
 
 ScreenRes IMG_W * 2 + 30, IMG_H + 20, 32
-'Randomize Timer
 
 const black = rgb(0,0,0)
 
@@ -365,37 +364,27 @@ Dim As CircleShape red_circles(), green_circles(), blue_circles()
 hsf.process_channel(source_image, RED_IDX,   red_circles(),   CIRCLES_PER_CHANNEL)
 hsf.process_channel(source_image, GREEN_IDX, green_circles(), CIRCLES_PER_CHANNEL)
 hsf.process_channel(source_image, BLUE_IDX,  blue_circles(),  CIRCLES_PER_CHANNEL)
-'Print ""
-'Print "Compression phase complete."
 
-' --- 3. "Decompress" by rendering circles into a new image ---
 Dim As Any Ptr final_image = ImageCreate(IMG_W, IMG_H)', 0, Black)
 
-'Print "Rendering final image from circle lists..."
-' Note: We pass the original source_image so the function can re-calculate the average
-' brightness for the demo. A real implementation would save this value.
 hsf.construct_target_channel(red_circles(),   final_image, RED_IDX)
 hsf.construct_target_channel(green_circles(), final_image, GREEN_IDX)
 hsf.construct_target_channel(blue_circles(),  final_image, BLUE_IDX)
-'Print "Rendering complete."
-'cls
 Draw String (10, IMG_H + 5), "Original Image"
 
 ' --- 4. Display results and save to disk ---
 Put (IMG_W + 20, 0), final_image, PSet
 Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
-
 'BSave "reconstructed_image.bmp", final_image
 
-'Print ""
-'Print "Saved reconstructed_image.bmp"
 locate 2,1
     using ns__single_channel_processing
     dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy)
-print "  estimated size :"; 7 + (cbits_data + 7)shr 3; " bytes"
+print "  estimated size :"; 6 + (cbits_data + 7)shr 3; " bytes .. (6 byte header)"
 print " "
 Print " Press any key to exit."
 print " "
+
 ' Clean up memory
 ImageDestroy(source_image)
 ImageDestroy(final_image)
