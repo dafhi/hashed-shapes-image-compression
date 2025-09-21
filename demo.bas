@@ -445,6 +445,8 @@ sleep 200
 
 Dim As Any Ptr final_image = ImageCreate(IMG_W, IMG_H)', 0, Black)
 
+dim as long CIRCLES_PER_CHANNEL = 15
+
 ' --- 2. "Compress" each channel by finding the best circles ---
 test source_image, final_image, circles_per_channel, 20, 0
 test source_image, final_image,                 250, IMG_W + 30, 0
