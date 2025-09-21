@@ -1,4 +1,6 @@
-/' -- hashed shapes image compression (proof of concept) - 2025 Sep 21  by dafhi
+/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 19.u1  by dafhi
+
+    - a work in progress
 
     Initial rollout by Gemini from my ability to recount previous work.
   
@@ -17,23 +19,8 @@
     circle fitness is a measure of accum buffer movement towards zero.
       (gotta remember to er0*er0 - er1*er1 (or use Abs) )
    
-      
       update:
-    removed bit masks from individual properties, adjusting
-    instead from property order in randomization
-  
-      near-term goal:
-    automate hyperparameter search
-
-  
-      about:
-    inspired by genetic algorithm triangles video around 2014.
-    I figured i could do it at least 1000x quicker, and with circles.
-
-    if you're interested in another simple algorithms with excellent
-    compression potential
-  
-    string art - https://www.freebasic.net/forum/viewtopic.php?t=33107
+    tweaks -> rad, xy, brightness bit count
 
 '/
 
@@ -80,21 +67,35 @@ sub print_shape_props( c as circleshape )
 end sub
 
 
-    namespace my_rng
+  function rotr( i as ulongint, r as byte ) as ulongint
+      return i shr r or i shl (64 - r)
+  end function
+
+    namespace my_rng '' 2025 Sep 16 - crafted for lossy image format  by dafhi
+
 const as ulongint     mulA  = &b0000000001000000000100000000100000001000000100000100001000100101
-const as ulongint     mulB  = &b1101001100001000000000010000000000000000100100000000000010000001
+const as ulongint     mulB  = &b1101001100001000000000010000000000000000100100000000000010000001 ' 2025 Sep 12
 const as ulongint     xorC  = &b0101010101010101010101010101010101010101010101010101010101010101
-  dim as ulongint       a, b, c,d,e, ro, xorshifted
+
+dim as ulongint       a, b, c,d,e, ro, xorshifted
+
 function v( seed as ulongint ) as ulongint
-    a = mulB * (a xor seed) + mulA
+    a = mulB * (a xor seed) + 1'mulA
     return a
 end function
-end namespace ' -- my_rng
 
+end namespace ' -- my_rng
 
   function rng( seed as ulongint = 0 ) as double
       return my_rng.v(seed) / ( 2^64 + (2048 + 2) )
   end function
+
+
+  #define CHOOSE(cond, a, b) (IIf_workaround__((cond), (a), (b))) '' possible perf. boost by Qwen3
+function IIf_workaround__(cond as boolean, a as long, b as long) as long
+    If cond Then Return a
+    Return b
+End Function
 
 
 ' BGRA byte order for 32-bit screen/images in FreeBASIC GFX
@@ -123,10 +124,6 @@ dim as ubyte      component_average(0 to 2), current_channel_idx ' Which channel
   
     dim as double g_radius
 
-dim as single hyper_param(9) '' will probably automate a parameter search
-dim as single cbits_initial
-dim as single cbits_decay_factor
-
   ' initializes processing for one channel.  saves some memory
 Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_idx As Integer, circle_list() as circleshape)', num_circles as long )
         
@@ -143,25 +140,12 @@ Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_i
     'compute_sobel channel_idx
     
     current_channel_idx = channel_idx
-    
-      hyper_param(0) = 2.0 '' will automate search for good hyper-param value
-    g_radius = (imva.w + imva.h) / hyper_param(0)
+    g_radius = (imva.w + imva.h) / 5.
 End Sub
 
   function f_adaptive_radius( seed as long = 0) as double
-  
-        dim as long f = rng(seed) ' dim as double  or  as long
-      
-      hyper_param(1) = 1.08
-      hyper_param(2) = 0.91
-      
-      hyper_param(3) = 2.75
-        
-        return clamp( _
-      g_radius * ( hyper_param(1) * f + hyper_param(2) * (1-f) ), _
-      max(imv.w,imv.h) / hyper_param(3), _
-      .85 )
-      
+        dim as double f = rng(seed)
+      return clamp( g_radius * ( 1.07 * f + 0.91 * (1-f) ), max(imv.w,imv.h) / 2.25, .85 )
   end function
 
 
@@ -197,95 +181,62 @@ End Function
 
   sub states_from_seed( byref c as CircleShape, shape_index as long, seed as long )
         using my_rng
-        
       a = xorC shr current_channel_idx
-      a xor= shape_index * mulA
-      
-      a += (seed * mulA)shr 1 '' Nov 21 - seed reintroduced
-      
-      c.rng_a = a
+      a xor= mulA * shape_index
+      a = rotr( a, 20 * current_channel_idx )
+      a *= mulB
+
       c.seed = seed
-  end sub
-  
-  function f_brightness_base( shape_index as long ) as single
-      return .9987 ^ (shape_index - 1)
-  end function
-  
-  function f_brightness_variance( shape_index as long ) as single
-      return .9987 ^ (shape_index - 1)
-  end function
-  
- 
-  function f_cbits( shape_index as long ) as long
-      
-        '' some of these may become hyper params
-        cbits_initial = 7.5
-        cbits_decay_factor = 0.97
-      return 2. + cbits_initial * cbits_decay_factor ^ (shape_index - 1)
-  
-  end function
+      c.rng_a = a
+  end sub  
+    
 
-  dim as long   pos_neg, g_cbits_total
-  dim as single br_base, br_var, xy_a, xy_b
-  
-  sub props_common( c as circleshape, shape_index as long )
-      
-      /'  quality depends on sequence (x y rad brightness)
-      
-        a b rad bright ****
-        a rad bright b  ****
-        a bright b rad  ***
-      
-      '/
-      
-          xy_a = rng
-          xy_b = rng
-        if imv.h > imv.w then swap xy_a, xy_b '' swap if image height is the major axis
-      c.x = imv.w * xy_a
-      c.y = imv.h * xy_b
+    '' cbits_xy reduces speed 2x as much as rad or bright
+  const cbits_xy   = 1, xy_mask  = 2 ^ cbits_xy - 1
+  const cbits_rad   = 6, rad_mask  = 2 ^ cbits_rad - 1
+  const cbits_bright  = 0, bright_mask  = 2 ^ cbits_bright - 1
 
-      c.radius = f_adaptive_radius
-      
-          pos_neg = iif( rng < .5, -1, 1 )
-          br_base = f_brightness_base( shape_index )
-          br_var = f_brightness_variance( shape_index )
-        hyper_param(4) = 30
-        hyper_param(5) = 20
-      c.brightness = (1 + hyper_param(4) * br_base + rng * (1 + hyper_param(5) * br_var) ) * pos_neg
-  
-  end sub
-  
-  sub props_from_states( c as circleshape, seed as long, shape_index as long )
+
+  sub props_from_states( c as circleshape, seed as long )
           
       my_rng.a = c.rng_a ' set the rng state
+        
+       '' sequence guesswork (as well as cbits, defined prior
+      c.radius = f_adaptive_radius( seed and rad_mask )
       
-      props_common c, shape_index
+        seed shr= cbits_rad
+      c.y = rng( seed and xy_mask ) * imv.h
+        seed shr= cbits_xy
+      c.x = rng( seed and xy_mask ) * imv.w
       
+        seed shr= cbits_xy
+        dim as single f = rng( seed and bright_mask )
+        dim as long pos_neg = iif( f < .5, -1, 1 )
+      c.brightness = (25 + rng * (110) ) * pos_neg ' future : make adaptive from circle_index
+    
   end sub
 
 
-Function find_best_circle( shape_index as long ) As CircleShape
+Function find_best_circle( circle_index as long ) As CircleShape
     static As CircleShape best_circle, candidate
     Dim As double best_score = -1e12
-    dim as long cbits = f_cbits(shape_index)
 
-        for seed as long = 1 to 2^cbits
-    states_from_seed candidate, shape_index, seed
-    props_from_states candidate, seed, shape_index
+        for seed as long = 1 to 2^(cbits_rad + cbits_bright + cbits_xy * 2)
+    states_from_seed candidate, circle_index, seed
+    props_from_states candidate, seed
     Dim As double score = calculate_fitness(candidate)
     If score > best_score Then
         best_score = score
         best_circle = candidate
     End If
     Next
-    g_cbits_total += cbits
-    
+
     Return best_circle
 End Function
 
-Sub render_circle_to_accum_buf( byval c As CircleShape, shape_index as long, reconstruction_phase as long = false )
+Sub render_circle_to_accum_buf( byval c As CircleShape, reconstruction_phase as long = false )
     
-    props_from_states c, c.seed, shape_index
+    props_from_states c, c.seed
     _cliprect c, imv
     
     Dim As Long r_squared = c.radius * c.radius
@@ -314,22 +265,6 @@ End Namespace ' -- ns__single_channel_processing
     Namespace hsf ' -- hashed shapes format
     
 Using ns__single_channel_processing
-
-sub show( channel_idx as long )
-    static as imvars imvars_t
-    if imvars_t.w <> imv.w or imvars_t.h <> imv.h then
-    fill_imvars imvars_t, imagecreate(imv.w,imv.h, rgb(0,0,0))
-    endif
-    line imvars_t.im, (0,0)-(imv.w-1, imv.h-1),rgb(0,0,0), bf
-    Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
-    For y As Long = 0 To imvars_t.h - 1
-        Dim As UByte Ptr row_ptr = dest_pixels + y * imvars_t.pitch
-        For x As Long = 0 To imvars_t.w - 1
-            row_ptr[x * 4 + channel_idx] = clamp( accumulator_buffer(x,y), 255)
-        Next
-    Next
-    put (0,0), imvars_t.im, pset
-end sub
 
 Sub process_channel( source_image as any ptr, channel_idx As Integer, circle_list() As CircleShape, num_circles As Integer)
 
@@ -362,9 +297,24 @@ Sub process_channel( source_image as any ptr, channel_idx As Integer, circle_lis
         Dim As CircleShape best_fit = find_best_circle(i)
         circle_list(i) = best_fit
 '        print_shape_props best_fit
-        render_circle_to_accum_buf best_fit, i
+        render_circle_to_accum_buf best_fit
     Next
 
+#if 0
+    static as imvars imvars_t
+    if imvars_t.w <> imv.w or imvars_t.h <> imv.h then
+    fill_imvars imvars_t, imagecreate(imv.w,imv.h)
+    endif
+    Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
+    For y As Long = 0 To imvars_t.h - 1
+        Dim As UByte Ptr row_ptr = dest_pixels + y * imvars_t.pitch
+        For x As Long = 0 To imvars_t.w - 1
+            row_ptr[x * 4 + channel_idx] = clamp( accumulator_buffer(x,y) + component_average(channel_idx), 255 )
+        Next
+    Next
+    put (0,0), imvars_t.im, pset
+'    sleep
+#endif
 '    Print "Channel " & channel_idx & " processing complete."
 End Sub
 
@@ -380,7 +330,9 @@ Sub construct_target_channel( circle_list() As CircleShape, target_image As Any 
 
         For i As Integer = LBound(circle_list) To UBound(circle_list)
     dim as long reconstruction = true
-    render_circle_to_accum_buf circle_list(i), i, reconstruction
+    render_circle_to_accum_buf circle_list(i), reconstruction
+'    ? circle_list(i).radius.i;
+
     Next
 
     ' copy to corresponding target channel
@@ -393,34 +345,12 @@ Sub construct_target_channel( circle_list() As CircleShape, target_image As Any 
     Next
 End Sub
 
-sub entire_one_channel( src as any ptr, des as any ptr, chan_idx as long, num_circles as long = 40 )
-      static As CircleShape circles()
-    hsf.process_channel src, chan_IDX, circles(), num_circles
-    hsf.construct_target_channel circles(), des, chan_IDX
-'    hsf.show chan_idx: sleep '300
-end sub
-
 End Namespace ' -- hsf
 
 
 ' =============================================================================
 '   MAIN PROGRAM
 ' =============================================================================
-
-sub test( source_image as any ptr, final_image as any ptr, num_circles as long, x as long = 0, y as long = 0 )
-      
-      hsf.g_cbits_total = 0
-    
-    hsf.entire_one_channel source_image, final_image, RED_IDX, num_circles
-    hsf.entire_one_channel source_image, final_image, Green_IDX, num_circles
-    hsf.entire_one_channel source_image, final_image, Blue_IDX, num_circles
-    
-    Put (x, y), final_image, PSet
-        
-    Draw String (x + 20, y + 5), " size : " + str(6 + (hsf.g_cbits_total + 7)shr 3) + " bytes .. (6 byte header)"
-
-end sub
-
 
 Const IMG_W = 556
 Const IMG_H = 556
@@ -439,31 +369,42 @@ For y As Integer = 0 To IMG_H - 1
         PSet source_image, (x, y), RGBA(r, g, b, 255)
     Next
 Next
-Put (20, 0), source_image, PSet
-Draw String (30, 5), "Original Image"
-sleep 200
+Put (10, 0), source_image, PSet
+
+Const CIRCLES_PER_CHANNEL = 840
+
+' --- 2. "Compress" each channel by finding the best circles ---
+Dim As CircleShape red_circles(), green_circles(), blue_circles()
+
+locate 3,3
+print "encoding .."
+hsf.process_channel(source_image, RED_IDX,   red_circles(),   CIRCLES_PER_CHANNEL)
+hsf.process_channel(source_image, GREEN_IDX, green_circles(), CIRCLES_PER_CHANNEL)
+hsf.process_channel(source_image, BLUE_IDX,  blue_circles(),  CIRCLES_PER_CHANNEL)
+Put (10, 0), source_image, PSet
 
 Dim As Any Ptr final_image = ImageCreate(IMG_W, IMG_H)', 0, Black)
 
-dim as long CIRCLES_PER_CHANNEL = 15
-
-' --- 2. "Compress" each channel by finding the best circles ---
-test source_image, final_image, circles_per_channel, 20, 0
-test source_image, final_image,                 250, IMG_W + 30, 0
-
+hsf.construct_target_channel(red_circles(),   final_image, RED_IDX)
+hsf.construct_target_channel(green_circles(), final_image, GREEN_IDX)
+hsf.construct_target_channel(blue_circles(),  final_image, BLUE_IDX)
+Draw String (10, IMG_H + 5), "Original Image"
 
 ' --- 4. Display results and save to disk ---
-'Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
+Put (IMG_W + 20, 0), final_image, PSet
+Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
 'BSave "reconstructed_image.bmp", final_image
 
-locate 5,1
-print " Algorithm test at different scales"
-print
-print " Press any key to exit"
+locate 2,1
+    using ns__single_channel_processing
+    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy*2 + cbits_bright)
+print "  estimated size :"; 6 + (cbits_data + 7)shr 3; " bytes .. (6 byte header)"
+print " "
+Print " Press any key to exit."
+print " "
 
 ' Clean up memory
 ImageDestroy(source_image)
 ImageDestroy(final_image)
 
 Sleep
-
