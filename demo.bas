@@ -1,6 +1,4 @@
-/' -- Hashed Shapes Format (a lossy image compression) - 2025 Sep 19.u1  by dafhi
-
-    - a work in progress
+/' -- hashed shapes image compression - 2025 Sep 19.u1  by dafhi
 
     Initial rollout by Gemini from my ability to recount previous work.
   
@@ -18,9 +16,24 @@
       (buffer will have positive and negative regions)
     circle fitness is a measure of accum buffer movement towards zero.
       (gotta remember to er0*er0 - er1*er1 (or use Abs) )
-   
+
+
       update:
-    tweaks -> rad, xy, brightness bit count
+    rollback to a version with unquestionably high quality output
+    
+      future:
+    automate a hyper-parameter search.  current set doesn't scale
+    well with encode size increase
+
+
+      about:
+    inspired by genetic algorithm triangles video around 2014.
+    I figured i could do it at least 1000x quicker, and with circles.
+
+    if you're interested in another simple algorithms with excellent
+    compression potential
+  
+    string art - https://www.freebasic.net/forum/viewtopic.php?t=33107
 
 '/
 
@@ -91,13 +104,6 @@ end namespace ' -- my_rng
   end function
 
 
-  #define CHOOSE(cond, a, b) (IIf_workaround__((cond), (a), (b))) '' possible perf. boost by Qwen3
-function IIf_workaround__(cond as boolean, a as long, b as long) as long
-    If cond Then Return a
-    Return b
-End Function
-
-
 ' BGRA byte order for 32-bit screen/images in FreeBASIC GFX
 Const BLUE_IDX  = 0
 Const GREEN_IDX = 1
@@ -123,9 +129,24 @@ Dim As ACCUM_TYPE accumulator_buffer(any, any) ' The 2-byte signed buffer
 dim as ubyte      component_average(0 to 2), current_channel_idx ' Which channel (R,G,B) we're working on
   
     dim as double g_radius
+    
+type hyper_parameters '' i plan to automate a parameter search
+    as single cbits_initial = 7.5
+    as single cbits_decay_factor = 0.988
+    as single radius_lim_1 = 1.07'1.125
+    as single radius_lim_2 = 0.92'0.89
+    as single g_radius_initial_divisor = 5
+    as single radius_clamp_ceil_divisor = 1.25
+    as single brightness_base_decay = 0.9987
+    as single brightness_variance_decay = 0.9987
+    as single brightness_base_multiplier = 30
+    as single brightness_variance_multiplier = 20
+end type
+
+  dim as hyper_parameters hypers
 
   ' initializes processing for one channel.  saves some memory
-Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_idx As Integer, circle_list() as circleshape)', num_circles as long )
+Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_idx As Integer, circle_list() as circleshape)
         
     if imva.im <> source_image then
     fill_imvars(imva, source_image)
@@ -140,12 +161,15 @@ Sub setup_channel_processing( imva as imvars, source_image As Any Ptr, channel_i
     'compute_sobel channel_idx
     
     current_channel_idx = channel_idx
-    g_radius = (imva.w + imva.h) / 5.
+    g_radius = (imva.w + imva.h) / hypers.g_radius_initial_divisor
 End Sub
 
   function f_adaptive_radius( seed as long = 0) as double
-        dim as double f = rng(seed)
-      return clamp( g_radius * ( 1.07 * f + 0.91 * (1-f) ), max(imv.w,imv.h) / 2.25, .85 )
+        dim as long f = rng(seed) '' i prefer as long but could be float
+        
+'      return clamp( g_radius * ( 1.07 * f + 0.92 * (1-f) ), _
+      return clamp( g_radius * ( hypers.radius_lim_1 * f + hypers.radius_lim_2 * (1-f) ), _
+      max(imv.w,imv.h) / hypers.radius_clamp_ceil_divisor, .85 )
   end function
 
 
@@ -181,49 +205,67 @@ End Function
 
   sub states_from_seed( byref c as CircleShape, shape_index as long, seed as long )
         using my_rng
+      #if 1
+      a = seed * mulA
+      a xor= xorC shl current_channel_idx
+      a += shape_index * mulA
+      #else
       a = xorC shr current_channel_idx
       a xor= mulA * shape_index
       a = rotr( a, 20 * current_channel_idx )
       a *= mulB
+      #endif
 
       c.seed = seed
       c.rng_a = a
-  end sub  
+  end sub
+  
+  function f_brightness_base( shape_index as long ) as single
+      return hypers.brightness_base_decay ^ (shape_index - 1)
+  end function
+  
+  function f_brightness_variance( shape_index as long ) as single
+      return hypers.brightness_variance_decay ^ (shape_index - 1)
+  end function
     
 
-    '' cbits_xy reduces speed 2x as much as rad or bright
-  const cbits_xy   = 1, xy_mask  = 2 ^ cbits_xy - 1
-  const cbits_rad   = 6, rad_mask  = 2 ^ cbits_rad - 1
-  const cbits_bright  = 0, bright_mask  = 2 ^ cbits_bright - 1
+  const cbits_xy   = 5 '' these actually no longer work individual properties - codebase needs update
+  const cbits_rad   = 0
+  const cbits_bright  = 0
 
+  dim as long   pos_neg, g_cbits_total
+  dim as single br_base, br_var, xy_a, xy_b
 
-  sub props_from_states( c as circleshape, seed as long )
+  sub props_from_states( c as circleshape, shape_index as long)', seed as long )
           
       my_rng.a = c.rng_a ' set the rng state
-        
-       '' sequence guesswork (as well as cbits, defined prior
-      c.radius = f_adaptive_radius( seed and rad_mask )
       
-        seed shr= cbits_rad
-      c.y = rng( seed and xy_mask ) * imv.h
-        seed shr= cbits_xy
-      c.x = rng( seed and xy_mask ) * imv.w
+          xy_a = rng
+          xy_b = rng
+        if imv.h > imv.w then swap xy_a, xy_b '' swap if image height is the major axis
+      c.x = imv.w * xy_a
+      c.y = imv.h * xy_b
+
+      c.radius = f_adaptive_radius
       
-        seed shr= cbits_xy
-        dim as single f = rng( seed and bright_mask )
-        dim as long pos_neg = iif( f < .5, -1, 1 )
-      c.brightness = (25 + rng * (110) ) * pos_neg ' future : make adaptive from circle_index
-    
+'        dim as long pos_neg = iif( rng < .5, -1, 1 )
+'      c.brightness = (25 + rng * (110) ) * pos_neg ' future : make adaptive from circle_index
+        pos_neg = iif( rng < .5, -1, 1 )
+        br_base = f_brightness_base( shape_index )
+        br_var = f_brightness_variance( shape_index )
+      c.brightness = (1 + hypers.brightness_base_multiplier * br_base + _
+      rng * (1 + hypers.brightness_variance_multiplier * br_var) ) * pos_neg
+  
   end sub
 
 
-Function find_best_circle( circle_index as long ) As CircleShape
+Function find_best_circle( shape_index as long ) As CircleShape
     static As CircleShape best_circle, candidate
     Dim As double best_score = -1e12
 
-        for seed as long = 1 to 2^(cbits_rad + cbits_bright + cbits_xy * 2)
-    states_from_seed candidate, circle_index, seed
-    props_from_states candidate, seed
+        for seed as long = 1 to 2^(cbits_rad + cbits_bright + cbits_xy * 1)
+    states_from_seed candidate, shape_index, seed
+    props_from_states candidate, shape_index', seed
     Dim As double score = calculate_fitness(candidate)
     If score > best_score Then
         best_score = score
@@ -234,9 +276,9 @@ Function find_best_circle( circle_index as long ) As CircleShape
     Return best_circle
 End Function
 
-Sub render_circle_to_accum_buf( byval c As CircleShape, reconstruction_phase as long = false )
+Sub render_circle_to_accum_buf( byval c As CircleShape, shape_index as long, reconstruction_phase as long = false )
     
-    props_from_states c, c.seed
+    props_from_states c, shape_index
     _cliprect c, imv
     
     Dim As Long r_squared = c.radius * c.radius
@@ -297,24 +339,9 @@ Sub process_channel( source_image as any ptr, channel_idx As Integer, circle_lis
         Dim As CircleShape best_fit = find_best_circle(i)
         circle_list(i) = best_fit
 '        print_shape_props best_fit
-        render_circle_to_accum_buf best_fit
+        render_circle_to_accum_buf best_fit, i
     Next
 
-#if 0
-    static as imvars imvars_t
-    if imvars_t.w <> imv.w or imvars_t.h <> imv.h then
-    fill_imvars imvars_t, imagecreate(imv.w,imv.h)
-    endif
-    Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imvars_t.pixels)
-    For y As Long = 0 To imvars_t.h - 1
-        Dim As UByte Ptr row_ptr = dest_pixels + y * imvars_t.pitch
-        For x As Long = 0 To imvars_t.w - 1
-            row_ptr[x * 4 + channel_idx] = clamp( accumulator_buffer(x,y) + component_average(channel_idx), 255 )
-        Next
-    Next
-    put (0,0), imvars_t.im, pset
-'    sleep
-#endif
 '    Print "Channel " & channel_idx & " processing complete."
 End Sub
 
@@ -330,7 +357,7 @@ Sub construct_target_channel( circle_list() As CircleShape, target_image As Any 
 
         For i As Integer = LBound(circle_list) To UBound(circle_list)
     dim as long reconstruction = true
-    render_circle_to_accum_buf circle_list(i), reconstruction
+    render_circle_to_accum_buf circle_list(i), i, reconstruction
 '    ? circle_list(i).radius.i;
 
     Next
@@ -371,7 +398,7 @@ For y As Integer = 0 To IMG_H - 1
 Next
 Put (10, 0), source_image, PSet
 
-Const CIRCLES_PER_CHANNEL = 840
+Const CIRCLES_PER_CHANNEL = 299
 
 ' --- 2. "Compress" each channel by finding the best circles ---
 Dim As CircleShape red_circles(), green_circles(), blue_circles()
@@ -397,7 +424,7 @@ Draw String (IMG_W + 20, IMG_H + 5), "Reconstructed Image"
 
 locate 2,1
     using ns__single_channel_processing
-    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy*2 + cbits_bright)
+    dim as long cbits_data = Circles_per_channel * (cbits_rad + cbits_xy*1 + cbits_bright)
 print "  estimated size :"; 6 + (cbits_data + 7)shr 3; " bytes .. (6 byte header)"
 print " "
 Print " Press any key to exit."
@@ -408,3 +435,4 @@ ImageDestroy(source_image)
 ImageDestroy(final_image)
 
 Sleep
+
