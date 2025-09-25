@@ -1,4 +1,4 @@
-/' -- Lossy Image Compression with Randomized Circles - 2025 Sep 25  by dafhi
+/' -- Lossy Image Compression with Randomized Circles - 2025 Sep 25.u1  by dafhi
 
     Initial rollout by Gemini.
     
@@ -10,7 +10,7 @@
     then erased to prep next randomization
   
       update:
-    evolutionary grid, lots of minor adjustments
+    starter image variation, full hyperparams mutation
     
 '/
 
@@ -421,9 +421,14 @@ sub plot_grid( src as any ptr, des as any ptr, shapes_per_chan as long, hy() as 
     hypers = sel
     hypers.cbits_base.mutate 3, 1.5
     hypers.cbits_mag.mutate 7, 1
-    hypers.cbits_decay.mutate .9999, .95
-    hypers.br_mag.mutate 60, 1
+    hypers.cbits_decay.mutate .9999, .67
+    hypers.rad_mult_a.mutate 1.45, 1.05
+    hypers.br_mag.mutate 120, 1
     hypers.br_var_mag.mutate 150, 1
+    hypers.br_decay.mutate .9999, .67
+    hypers.br_var_decay.mutate .9999, .67
+    hypers.radius_clamp_div.mutate 4, 30
+
     test src, des, x, y, shapes_per_chan
     if hypers.score > hy(x,y).score then
     hy(x,y) = hypers
@@ -438,8 +443,13 @@ sub plot_grid( src as any ptr, des as any ptr, shapes_per_chan as long, hy() as 
     
 end sub
 
+    sub best_to_top_left( hy() as hyper_parameters )
+        swap hy(0,0), hy( best_ix, best_iy )
+    end sub
+
+
 sub testpattern( imv as imvars )
-    dim as long seed = 40, w = imv.w, h = imv.h, diagonal = sqr(w*w + h*h)
+    dim as long seed = 63, w = imv.w, h = imv.h, diagonal = sqr(w*w + h*h)
     randomize seed
     for i as long = 1 to 10
         dim as ulong col = rnd*culng(-1)
@@ -460,7 +470,7 @@ end sub
 Const IMG_W = 356
 Const IMG_H = 256
 
-dim as long shapes_per_chan = 100
+dim as long shapes_per_chan = 40
 
 ScreenRes IMG_W * 2 + 30, IMG_H * 2 + 20, 32
 
@@ -485,12 +495,6 @@ dim as double t = timer, dt, tp, t0 = t
 ' Mouse support variables
 dim as integer mouse_x, mouse_y, mouse_btn, mouse_btn_prev, hy_index
 dim as hyper_parameters hypers_clicked, hy(2,2), hypers_original
-
-  '' obtain an initial score and fill grid params
-'test source_image, final_image, 50, 50, shapes_per_chan
-for y as long = 0 to 2 : for x as long = 0 to 2
-hy(x,y) = hypers
-: next : next
 
 dim as long new_generation = true
 
@@ -533,6 +537,7 @@ do
     for i as long = 1 to 1
     plot_grid source_image,final_image, shapes_per_chan, hy(), best_ix, best_iy
     next
+    best_to_top_left hy()
     new_generation = false
     endif
     
