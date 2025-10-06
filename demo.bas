@@ -556,9 +556,9 @@ ImageDestroy(final_image)
 #if 0
 chdir exepath
 open "hypers.txt" for output as #1
-  print #1 ,, "value", "max", "min"
-  forloop_hparams( tile(0,0) )
-    print #1, p->name, p->f, p->hi, p->lo
+  print #1 ,, "value"
+  forloop_hparams( hypers )
+    print #1, p->name, p->f
   next
 close #1
 #endif
