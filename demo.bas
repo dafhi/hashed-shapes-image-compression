@@ -1,4 +1,4 @@
-/' -- Lossy Image Compression with Randomized Circles - 2025 Oct 20  by dafhi
+/' -- Lossy Image Compression with Randomized Circles - 2025 Oct 23  by dafhi
 
     Initial rollout by Gemini to get me inspired.
     
@@ -6,10 +6,10 @@
       fitness is an in-place before-and-after calc.
   
     before, i would write a circl to accum buf,
-    error calc, then erase (to prep for next rnd circl)
+    error calc, then erase (to prep for next rnd circle)
   
       update:
-    tweaks, code shuffle
+    evolution logic
   
 '/
 
@@ -41,24 +41,8 @@ Sub fill_imvars( Byref i As imvars, im As Any Ptr = 0)
     End If
 End Sub
 
-sub testpattern( imv as imvars )
-    dim as long seed = 95, w = imv.w, h = imv.h, diagonal = sqr(w*w + h*h)
-    randomize seed
-    for i as long = 1 to 10
-        dim as ulong col = rnd*culng(-1)
-        if rnd < .25 then
-            line imv.im, (rnd*w,rnd*h)-(rnd*w,rnd*h), col
-        elseif rnd < .30 then
-            line imv.im, (rnd*w,rnd*h)-(rnd*w,rnd*h), col, bf
-        else
-            circle imv.im, (rnd*w, rnd*h), diagonal * (.01 + rnd * .15), col,,,,f
-        endif
-    next
-end sub
-
     #define min( a,b) iif( (a)<(b), (a), (b) )
     #define max( a,b) iif( (a)>(b), (a), (b) )
-
 
 sub downscale(byref dest as imvars, byref source as imvars )
 
@@ -96,24 +80,24 @@ sub downscale(byref dest as imvars, byref source as imvars )
     next y
 end sub
 
-  Namespace custom_rng
-    Const As ULongInt mulA = &b0000000001000000000100000000100000001000000100000100001000100101
-    Const As ULongInt mulB = &b1101001100001000000000010000000000000000100100000000000010000001
-    Dim As ULongInt a
-    Function v(seed As ULongInt) As ULongInt
-        a = mulA * (a Xor seed) + 1
-        Return a
-    End Function
-  End Namespace
+sub testpattern( imv as imvars )
+    dim as long seed = 95, w = imv.w, h = imv.h, diagonal = sqr(w*w + h*h)
+    randomize seed
+    for i as long = 1 to 10
+        dim as ulong col = rnd*culng(-1)
+        if rnd < .25 then
+            line imv.im, (rnd*w,rnd*h)-(rnd*w,rnd*h), col
+        elseif rnd < .30 then
+            line imv.im, (rnd*w,rnd*h)-(rnd*w,rnd*h), col, bf
+        else
+            circle imv.im, (rnd*w, rnd*h), diagonal * (.01 + rnd * .15), col,,,,f
+        endif
+    next
+end sub
 
-  function f_rng( seed as ulongint = 0 ) as double
-      return custom_rng.v(seed) / ( 2^64 + (2048 + 2) )
-  end function
-
-    #define rng  f_rng
-
-function clamp( in As double, hi As double = 1, lo As double = 0) As double '' ai code assistent suggested this is potentially slow
-  return min( max(in, lo), hi )
+function clamp( in As double, hi As double = 1, lo As double = 0) As double '' 2025 Oct 21
+    if in < lo then: in = lo: elseif in > hi then: in = hi : endif
+    return in
 End Function
 
 function round(in as double, places as ubyte = 3) as string ' 2024 Aug 4
@@ -125,10 +109,6 @@ End Function
 function sqr_safe( d as double ) as double
     return sgn(d) * sqr( abs(d))
 end function
-
-
-
-    type ACCUM_TYPE as short
 
 
 type t_hyper_parameter
@@ -146,12 +126,12 @@ operator t_hyper_parameter.cast as string : return name + " " + str(f): end oper
 operator t_hyper_parameter.let( v as single ): f = v : end operator
 sub t_hyper_parameter.mutate( hi as single, lo as single )
     dim as single a = lo + rnd * (hi - lo), b = hi + rnd * (lo - hi) '' experimental
-    #if 0
-    a = a + rnd * (b-a)
-    f = f + rnd * (a - f)
-    #else
-    f = a + rnd * (b-a)
-    #endif
+    if rnd < .65 then '' 2025 Oct 21
+        a = lo + rnd * (hi - lo)
+        f = f + rnd * (a - f)
+    else
+        f = lo + rnd * (hi-lo)
+    endif
 end sub
 
     sub print_param( t as t_hyper_parameter, x as long = 0, y as long = 0, col as ulong = rgb(255,255,255) )
@@ -170,56 +150,69 @@ type hyper_parameters
 
         #define forloop_hparams(q)  _     ' ready-to-use macro
     for p as t_hyper_parameter ptr = _
-    @(q).div_rad_ini to @(q).br           ' < -- make ends match first and last hy param
+    @(q).br to @(q).br_var           ' < -- make ends match first and last hy param
 
 
-    as t_hyper_parameter div_rad_ini      = type( "div rad ini", 15.3 )
-    as t_hyper_parameter rad_decay        = type( "rad decay", .2 )
-    as t_hyper_parameter br_var_decay     = type( "br var dcy", .97 )
-    as t_hyper_parameter br_var           = type( "br var", 49 )
-    as t_hyper_parameter br_decay         = type( "br decay", .999 )
-    as t_hyper_parameter br               = type( "br", 29 )
+    as t_hyper_parameter br               = type( "br", 34.5 )
+    as t_hyper_parameter cb_pen_image     = type( "cb_pen_image", .18 ) '' high escapes local min but can lose great result
+    as t_hyper_parameter cb_pen_shape     = type( "cb_pen_shape", 1. )
+    as t_hyper_parameter div_rad_ini      = type( "div rad ini", 6.1 )
+    as t_hyper_parameter rad_decay        = type( "rad decay", .04 )
+    as t_hyper_parameter mag_rad_ini      = type( "mag rad ini", .395 )
+    as t_hyper_parameter br_var_decay     = type( "br var dcy", .986 )
+    as t_hyper_parameter br_decay         = type( "br decay", .9995 )
+    as t_hyper_parameter br_var           = type( "br var", 26.5 )
 
-    as single score, PSNR, mean_squared_error
-    as long   cbits_total
+    as single score, MSE
 
 end type
 
 sub mutate( d as hyper_parameters ) '' reasonable values as 
 
-    d.div_rad_ini.mutate 6.5, 23 '' lowest recommended value 4.0 ish for encode speed
-
-    d.rad_decay.mutate .26, .15 '' division-based decay in f_radius()
-
-    d.br.mutate 25, 60
-    d.br_decay.mutate .9999, .95
+    d.br.mutate 33, 55
     
-    d.br_var.mutate 35, 85
-    d.br_var_decay.mutate .9999, .95
+'    d.cb_pen_shape.mutate 4/6, 11/6
+'    d.cb_pen_image.mutate .007, .012
+
+    d.div_rad_ini.mutate 8, 4
+
+    d.rad_decay.mutate .10, .03 '' division-based decay in f_radius()
+    d.mag_rad_ini.mutate .2, .45
+
+    d.br_var_decay.mutate .9999, .975
+    d.br_decay.mutate .9999, .985
+    
+    d.br_var.mutate 5, 49
     
     d.score = 0
 end sub
 
-  sub print_hypers( h as hyper_parameters )
+  sub print_hypers( h as hyper_parameters, x as long, y as long, col as ulong = rgb(0,0,255) )
       forloop_hparams( h )
-      print *p : next
+      dim as long i = p - @h.br
+      print_param *p, x, y + i*10, col
+      : next
   end sub
 
 Const BLUE_IDX  = 0 ' BGRA byte order for 32-bit screen/images in FreeBASIC GFX
 Const GREEN_IDX = 1
 Const RED_IDX   = 2
 Const ALPHA_IDX = 3
+
+    type ACCUM_TYPE as short
 ' ------------------------------
 
 
     Namespace hashed_circles_encoder
     
-dim as single           g_radius, hard_rad_max
-dim as long             x0, x1, y0, y1, pos_neg, chan_idx, component_average, ix0, ix1, new_generation, _dbg
+    #define rng  f_rng
+
+dim as single           g_radius, hard_rad_max', mean_squared_error
+dim as long             x0, x1, y0, y1, pos_neg, chan_idx, ix0, new_generation, _dbg
 
 Dim As ACCUM_TYPE       accumulator_buffer(any, any)
 dim as hyper_parameters hypers, h_backup
-dim as long             n_groups, hdr_cbits = 2, shape_cbits = 4
+dim as long             component_average, hdr_cbits = 2, shape_cbits = 3
 
 type CircleShape
     as single x, y, rad, bright
@@ -232,15 +225,12 @@ end type
       y1 = min( circl.y + circl.rad, imv.h - 1 )
   end sub
 
-    '' fixed bits header (perhaps vari width in future version)
-    '' vari bits seed
-    dim as ushort a_hdr( any, any ), a_seed( any, any ) '' ( val, rgb_channel )
+    dim as ushort a_hdr( any, any ), a_seed( any, any ) '' ( val, channel )
 
 Sub setup_channel_processing( imv as imvars, num_groups as ushort, channel_idx as long )
     redim accumulator_buffer(imv.w-1, imv.h-1)
-    n_groups = num_groups
-        dim as long u = ubound( a_hdr, 1 ), n = (n_groups + 1) * 1.3
-    if n_groups > u then redim preserve a_hdr( n, 0 to 2 ), a_seed( n, 0 to 2 )
+        dim as long u = ubound( a_hdr, 1 ), n = (num_groups + 1) * 1.3
+    if num_groups > u then redim preserve a_hdr( n, 0 to 2 ), a_seed( n, 0 to 2 )
     hard_rad_max = (imv.w + imv.h) / hypers.div_rad_ini
     g_radius = hard_rad_max
     chan_idx = channel_idx
@@ -285,12 +275,25 @@ Function fitness_of_circle( im_src as imvars, circl as CircleShape ) As double
 
 End Function
 
-    dim as ushort     g_random_seed
+        Namespace custom_rng
+    Const As ULongInt mulA = &b0000000001000000000100000000100000001000000100000100001000100101
+    Const As ULongInt mulB = &b1101001100001000000000010000000000000000100100000000000010000001
+    Dim As ULongInt a
+    Function v(seed As ULongInt) As ULongInt
+        a = mulA * (a Xor seed) + 1
+        Return a
+    End Function
+    End Namespace
+
+    function f_rng( seed as ulongint = 0 ) as double
+        return custom_rng.v(seed) / ( 2^64 + (2048 + 2) )
+    end function
+
     dim as single     xy_a, xy_b, br_var, hard_rad_min = 0.77
 
   function f_radius( circl_index as long ) as double
-      dim as single f = rng, j = 1 + .07 + .29 / (1 + circl_index * hypers.rad_decay)
-      return clamp( g_radius * ( (2-j)*f + j*(1-f) ), hard_rad_max, hard_rad_min )
+      dim as single f = rng, ratio = 1.05 + hypers.mag_rad_ini / (1 + circl_index * hypers.rad_decay)
+      return clamp( g_radius * ( (2 - ratio)*f + ratio*(1-f) ), hard_rad_max, hard_rad_min )
   end function
     
   function f_brightness( circl_index as long ) as single
@@ -306,17 +309,27 @@ End Function
           a = seed * mulA
           a = (a xor circle_index) * mulA
           a = (a xor chan_idx) * mulA
-          a = (a xor parent_rngstate xor g_random_seed) * mulB
+          a = (a xor parent_rngstate) * mulB
     end sub
 
-        dim as ulongint     group_rng_state, g_grp_idx
+        dim as ulongint     group_rng_state, g_grp_idx, cbits_total
         dim as CircleShape  best_fit, circ
+  
+  sub print_info( ix as long, iy as long, col as ulong )
+      draw string (ix + 180, iy + 0), "bytes " + str((cbits_total + 7)shr 3),col
+      print_hypers hypers, ix, iy, col
+      iy += 100
+      draw string (ix, iy + 0), "shape cbits " + str(shape_cbits) + "  used in group_derivates", col
+      draw string (ix, iy + 20), "score (MSE, bits) " + round( hypers.score, 2),col
+      draw string (ix, iy + 30), " MSE             " + round( hypers.MSE, 2),col
+  end sub
 
     sub circle_props( imv as imvars, circle_idx as long, seed_circs as ushort)
         circle_idx += g_grp_idx
         rng_from_seeds circle_idx, seed_circs, group_rng_state
         
           br_var  = f_brightness_variance( circle_idx )
+          'br_var  = hypers.br_var - f_brightness_variance( circle_idx )
           pos_neg = iif( rng < .5, -1, 1 )
         circ.bright = pos_neg * ( 1 + rng + f_brightness( circle_idx ) + rng * br_var )
         
@@ -325,16 +338,16 @@ End Function
         circ.rad = f_radius( circle_idx )
     end sub
     
-        dim as long   cbits_circles, best_seed, best_grp_cbits, i_hy_raw
-    
+        dim as long   cbits_circles, best_seed, n_groups
+
     sub group_derivates( hdr as ushort, grp_idx as long )
         rng_from_seeds( grp_idx, hdr, 0 )
-        cbits_circles = rng * (shape_cbits + .5)' + .25
+        cbits_circles = rng * (shape_cbits + .0)
         group_rng_state = custom_rng.a
         g_grp_idx = grp_idx
     end sub
     
-    sub draw_circle( im_src as imvars, seed_circs as ushort, decode_stage as long = true )
+    sub props_then_draw( im_src as imvars, seed_circs as ushort, decode_stage as long = true )
         circle_props im_src, 0, seed_circs
         render_circle_to_accum_buf im_src, circ, decode_stage
     end sub
@@ -355,38 +368,54 @@ End Function
     sub find_best_hdr( im_src as imvars, idx as long )
         dim as double   best_score = -1e12
             for hdr as ushort = 0 to 2^hdr_cbits - 1
-                const as single cb_penalty_shape = 5/6
-        dim as single score = f_group_score( im_src, hdr, idx ) / log(1+hdr_cbits + cbits_circles)' ^ cb_penalty_shape
+        dim as single score = f_group_score( im_src, hdr, idx ) / (1+hdr_cbits + cbits_circles) ^ hypers.cb_pen_shape
             If score > best_score Then
         best_score = score
         a_hdr(idx, chan_idx) = hdr
         a_seed(idx, chan_idx) = best_seed
-        best_grp_cbits = hdr_cbits + cbits_circles
         endif
         next
-        hypers.cbits_total += best_grp_cbits
     End sub
 
-    sub convert_accum_to_imvars( imv as imvars )
-        Dim As UByte Ptr dest_pixels = Cptr(UByte Ptr, imv.pixels)
-        For y As Long = 0 To imv.h - 1
-        Dim As UByte Ptr row_des = dest_pixels + y * imv.pitch + chan_idx
-            For x As Long = 0 To imv.w - 1
+    sub _decode__imv_and_mse( imv_des as imvars, imv_src as imvars )
+        dim as longint delta_sum
+        Dim As UByte Ptr des_pixels = Cptr(UByte Ptr, imv_des.pixels) + chan_idx
+        Dim As UByte Ptr src_pixels = Cptr(UByte Ptr, imv_src.pixels) + chan_idx
+        For y As Long = 0 To imv_des.h - 1
+        Dim As UByte Ptr row_des = des_pixels + y * imv_des.pitch
+        Dim As UByte Ptr row_src = src_pixels + y * imv_src.pitch
+            For x As Long = 0 To imv_des.w - 1
             row_des[x*4] = clamp( accumulator_buffer(x,y) + component_average, 255 )
+            dim as short d = row_des[x*4] - row_src[x*4]
+            delta_sum += d * d
             Next
         Next y
+        hypers.mse += delta_sum / imv_src.w / imv_src.h
     end sub
+    
+    sub accum_to_MSE( imv as imvars )
+        dim as longint delta_sum
+        For y As Long = 0 To imv.h - 1
+            For x As Long = 0 To imv.w - 1
+                dim as long _result = clamp( accumulator_buffer(x,y), component_average, component_average - 255 )
+                delta_sum += _result * _result
+            Next
+        Next
+        hypers.mse += delta_sum / imv.w / imv.h
+    end sub
+    
+        Dim As imvars   imv_result, imv_small, imv_src
 
-        Dim As imvars   imv_result
 
-  Sub _decode( target_image As Any Ptr, chan_idx As long)
+  Sub _decode( chan_idx As long)
       setup_channel_processing imv_result, n_groups, chan_idx
       For i As long = 1 to n_groups
           group_derivates a_hdr( i, chan_idx ), i
-          draw_circle imv_result, a_seed(i, chan_idx)
+          props_then_draw imv_result, a_seed(i, chan_idx)
           g_radius = circ.rad
+          cbits_total += hdr_cbits + cbits_circles
       Next
-      convert_accum_to_imvars imv_result
+      _decode__imv_and_mse imv_result, imv_src
   End Sub
   
   Sub _encode( imv as imvars, chan_idx As long, num_groups As long )
@@ -408,67 +437,63 @@ End Function
       For i As long = 1 To num_groups
           find_best_hdr imv, i
           group_derivates a_hdr(i, chan_idx), i
-          const decode_stage = false
-          draw_circle imv, a_seed(i, chan_idx), decode_stage
+              const decode_stage = false
+          props_then_draw imv, a_seed(i, chan_idx), decode_stage
           g_radius = circ.rad
+          cbits_total += hdr_cbits + cbits_circles
       Next i
-      
-      dim as longint delta_sum
-      Dim As UByte Ptr src_pixels = Cptr(UByte Ptr, imv.pixels)
-      For y As Long = 0 To imv.h - 1
-          Dim As UByte Ptr row_src = src_pixels + y * imv.pitch + chan_idx
-          For x As Long = 0 To imv.w - 1
-              dim as long _result = clamp( accumulator_buffer(x,y), component_average, component_average - 255 )
-              delta_sum += (_result)^2
-          Next
-      Next : hypers.mean_squared_error += delta_sum / imv.w / imv.h
-      
+      accum_to_MSE imv
   End Sub
 
-sub decode( des as any ptr )
-    if imv_result.im <> des then  fill_imvars(imv_result, des)
-    _decode(des, red_IDX )
-    _decode(des, Green_IDX )
-    _decode(des, Blue_IDX )
-end sub
-    
-    dim as imvars  imv_small, imv
+  sub enc_dec__pre
+      hypers.mse = 0
+      cbits_total = 0
+  end sub
+
+  sub calculate_score
+      hypers.score = 1e4 / hypers.mse / cbits_total ^ hypers.cb_pen_image
+  end sub
 
     sub choose_whether_to_downscale( r as single, byref p as imvars ptr, internal_image_diagonal as single )
         dim as single scale = min( internal_image_diagonal / r, 1 )
         if scale < 1 then
-            fill_imvars imv_small, imagecreate( imv.w * scale, imv.h * scale )
-            downscale imv_small, imv
+            fill_imvars imv_small, imagecreate( imv_src.w * scale, imv_src.h * scale )
+            downscale imv_small, imv_src
             p = @imv_small
         endif
     end sub
 
-sub encode( src as any ptr, n_groups as long )
+sub encode( src as any ptr, num_groups as long )
     
-    if imv.im <> src then fill_imvars imv, src
+    if imv_src.im <> src then fill_imvars imv_src, src
     
-    dim as single r = sqr(imv.w^2+imv.h^2)
+    dim as single r = sqr(imv_src.w^2+imv_src.h^2)
     if r < 2 then exit sub
     
-    dim as imvars ptr p_imv = @imv
-    choose_whether_to_downscale r, p_imv, 150 '' scaled diagonal
+    dim as imvars ptr p_imv = @imv_src
+    choose_whether_to_downscale r, p_imv, 350 '' scaled diagonal
     
-    hypers.mean_squared_error = 0
-    hypers.cbits_total = 0
-    
+    enc_dec__pre
+    n_groups = num_groups
     _encode *p_imv, red_IDX, n_groups
     _encode *p_imv, green_IDX, n_groups
     _encode *p_imv, blue_IDX, n_groups
-        
-        const as single cb_penalty_image = 9/6
-    hypers.psnr = 1e6 / ( hypers.mean_squared_error + 1 )
-    hypers.score = 1e2 * hypers.psnr / (0+hypers.cbits_total) ^ cb_penalty_image
-    
+    calculate_score
     new_generation = true
 end sub
 
-    const  u_hy = 2
-    dim as hyper_parameters hy(u_hy)
+sub update_seeds( src as any ptr, num_groups as long )
+    encode src, num_groups
+end sub
+
+sub decode( des as any ptr )
+    if imv_result.im <> des then  fill_imvars(imv_result, des)
+    
+    enc_dec__pre
+    _decode red_IDX
+    _decode Green_IDX
+    _decode Blue_IDX
+end sub
 
 End Namespace ' -- hashed_circls_encoder
 
@@ -477,17 +502,6 @@ End Namespace ' -- hashed_circls_encoder
 ' =============================================================================
 
   using hashed_circles_encoder
-  
-  sub print_info( ix as long, iy as long, col as ulong )
-      draw string (ix + 180, iy + 0), "bytes " + str((hypers.cbits_total + 7)shr 3),col
-      print_param hypers.br, ix, iy + 10, col
-      print_param hypers.br_decay, ix, iy + 20, col
-      print_param hypers.div_rad_ini, ix, iy + 30, col
-      print_param hypers.rad_decay, ix, iy + 40, col
-      draw string (ix, iy + 55), "shape cbits " + str(shape_cbits) + "  used in group_derivates", col
-      draw string (ix, iy + 75), "score (PSNR, bits) " + round( hypers.score, 2),col
-      draw string (ix, iy + 85), "PSNR " + round( hypers.psnr, 2),col
-  end sub
 
 sub show( des as any ptr, ix as long=0, iy as long=0 )
     decode des
@@ -496,52 +510,41 @@ sub show( des as any ptr, ix as long=0, iy as long=0 )
     print_info ix, iy, rgb(255,255,255)
 end sub
 
-    sub calculate_internal_array_scores( src as any ptr, n_groups as long )
-        for i as long = 0 to u_hy
-            hypers = hy(i)
-            encode src, n_groups '' update with new settings
-            hy(i).score = hypers.score
-        next
-    end sub
 
-
-sub _evolve( src as any ptr, user_cbits_adjust as long, n_groups as long = 100, loops as long = 1 )
+sub _evolve( src as any ptr, user_cbits_adjust as long, chan_cshapes as long = 100, loops as long = 1 )
     
+    static as hyper_parameters h0:h0 = hypers
     shape_cbits = user_cbits_adjust
-    
+
         for i as long = 1 to loops
-    dim as long n = int(rnd*(u_hy+1))
-    hypers = hy(n)
     mutate hypers
-    encode src, n_groups
+    encode src, chan_cshapes
     locate 1,30
-    ? hypers.psnr, hypers.score
-    if hypers.score > hy(n).score then hy(n) = hypers
+    ? hypers.mse, hypers.score
+    if hypers.score > h0.score then h0 = hypers : exit for
     sleep 1
     next
     
+    if h0.score > hypers.score then hypers = h0
 end sub
 
-sub evolve( src as any ptr, n_groups as long = 100, u_loop as long = 0 )
-    dim as long cbits_save = shape_cbits
-    
+sub evolve( src as any ptr, chan_cshapes as long = 100, u_loop as long = 0 )
+
     h_backup = hypers
-    g_random_seed = rnd * culng(-1)
-    calculate_internal_array_scores src, n_groups
+    dim as long cbits_save = shape_cbits
     
     locate 1,1
     ? "scores from random params"
     
-    if shape_cbits > 0 then
-    '_evolve src, cbits_save-1, n_groups, (u_loop + 1) / 2
-    endif
-    _evolve src, cbits_save, n_groups, (u_loop + 1)' / 1.5
-    
-    for i as long = 0 to u_hy
-        if hy(i).score > hypers.score then  hypers = hy(i)
+    dim as single f, a = chan_cshapes, b = a * .11 '' shape count end targets
+
+    for i as long = 1 to 10
+        f = rnd
+        _evolve src, cbits_save, a+f*(b-a), (u_loop + 1) * (1 + f) '' more time for low shape count for speedup
     next
-    if h_backup.score > hypers.score then  hypers = h_backup
-    encode src, n_groups '' update with new settings
+    
+    if h_backup.score > hypers.score then hypers = h_backup
+    update_seeds src, chan_cshapes
 
 end sub
 
@@ -578,8 +581,7 @@ dim as string kstr = ""
     print "  Keys: " + chr(10) + _
     "                  " + chr(10) + _
     "  left right : circle count" + chr(10) + _
-    "  a          : evolve hyperparameters" + chr(10) + _
-    "  g          : global seed"
+    "  a          : evolve hyperparameters"
 #endif
 dim as double t = timer, dt, tp, t0 = t
 
@@ -596,22 +598,19 @@ do
     keystate_0_CTRL = keystate_CTRL:    keystate_CTRL = multikey(29)
     
     if keystate_A <> 0 and keystate_0_A = 0 then
-        evolve source_image, shapes_per_chan, clamp( 9999 / (shapes_per_chan * shape_cbits)^.75, 25, 3 )
+        evolve source_image, shapes_per_chan, clamp( 9999 / (shapes_per_chan * shape_cbits)^.75, 3, 1 )
     endif
     
     select case (kstr)
     case chr(27) '' esc
         exit do
-    case "g", "G"
-        g_random_seed = rnd * culng(-1)
-        encode source_image, shapes_per_chan
     case extchar + chr(75) ' - LEFT -
         if shapes_per_chan > 1 then
         shapes_per_chan -= max(1, 0.2*shapes_per_chan )
         encode source_image, shapes_per_chan
         endif
     case extchar + chr(77) ' - RIGHT -
-        if shapes_per_chan < 1999 then
+        if shapes_per_chan < 2999 then
         shapes_per_chan += max(1, 0.2*shapes_per_chan)
         encode source_image, shapes_per_chan
         endif
