@@ -1,4 +1,4 @@
-/' -- Lossy Image Compression with Randomized Circles - 2025 Oct 27  by dafhi
+/' -- Lossy Image Compression with Randomized Circles - 2025 Oct 27.u1  by dafhi
 
     Initial rollout by Gemini to get me inspired.
     
@@ -170,18 +170,18 @@ type hyper_parameters
     
     as t_hyper_parameter hdr_cbits        = type( " hdr  cbits", 4 )
     as t_hyper_parameter shape_cbits      = type( "shape cbits", 4 )
-    as t_hyper_parameter sim_cshapes      = type( "sim cshapes", 50 )
-    as t_hyper_parameter sim_cs_decay     = type( "sim cs decay", .9 )
-    as t_hyper_parameter cb_pen_shape     = type( "cb_pen_shape", .984 ) '' above 1 escapes local min
-    as t_hyper_parameter f_cbits_decay    = type( "f_cbits decay", 0.625 )
-    as t_hyper_parameter f_cbits          = type( "f_cbits   ", 3.97 )
-    as t_hyper_parameter div_rad_ini      = type( "div rad ini", 65.6 )
-    as t_hyper_parameter mag_rad_ini      = type( "mag rad ini", .372 )
-    as t_hyper_parameter rad_decay        = type( "rad decay", .0173 )
+    as t_hyper_parameter sim_cshapes      = type( "sim cshapes", 5.91 )
+    as t_hyper_parameter sim_cs_decay     = type( "sim cs decay", .5569 )
+    as t_hyper_parameter cb_pen_shape     = type( "cb_pen_shape", 1.188 ) '' above 1 escapes local min
+    as t_hyper_parameter f_cbits_decay    = type( "f_cbits decay", 0.569 )
+    as t_hyper_parameter f_cbits          = type( "f_cbits   ", 1.542 )
+    as t_hyper_parameter div_rad_ini      = type( "div rad ini", 9.17 )
+    as t_hyper_parameter mag_rad_ini      = type( "mag rad ini", .6215 )
+    as t_hyper_parameter rad_decay        = type( "rad decay", .0138 )
     as t_hyper_parameter br               = type( "br", 42.7 )
-    as t_hyper_parameter br_var           = type( "br var", 27.6 )
-    as t_hyper_parameter br_var_decay     = type( "br var dcy", .78 )
-    as t_hyper_parameter br_decay         = type( "br decay", .113 )
+    as t_hyper_parameter br_var           = type( "br var", 37.54 )
+    as t_hyper_parameter br_var_decay     = type( "br var dcy", 1.52 )
+    as t_hyper_parameter br_decay         = type( "br decay", .143 )
 
     as single score, MSE
 
